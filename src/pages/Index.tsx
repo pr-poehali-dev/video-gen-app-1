@@ -1,6 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Icon from "@/components/ui/icon";
+
+const API_GENERATE = "https://functions.poehali.dev/41ee0003-70f4-4f10-9198-9c316970c345";
+const API_CHECK = "https://functions.poehali.dev/a4867ee5-4dfc-4ec4-bf50-f3681ee61227";
+
+type GenStatus = "idle" | "pending" | "running" | "done" | "error";
+
+interface GeneratedClip {
+  videoUrl: string;
+  prompt: string;
+  duration: number;
+}
 
 type Section = "editor" | "library" | "projects" | "settings" | "export" | "help";
 
@@ -51,15 +62,74 @@ const EXPORT_FORMATS = [
 
 function EditorSection() {
   const [aiPrompt, setAiPrompt] = useState("");
-  const [generating, setGenerating] = useState(false);
-  const [generated, setGenerated] = useState(false);
+  const [duration, setDuration] = useState(10);
+  const [genStatus, setGenStatus] = useState<GenStatus>("idle");
+  const [genProgress, setGenProgress] = useState(0);
+  const [genError, setGenError] = useState("");
+  const [clip, setClip] = useState<GeneratedClip | null>(null);
   const [playhead, setPlayhead] = useState(33);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const handleGenerate = () => {
-    if (!aiPrompt.trim()) return;
-    setGenerating(true);
-    setTimeout(() => { setGenerating(false); setGenerated(true); }, 2200);
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const pollStatus = useCallback((taskId: string) => {
+    let attempts = 0;
+    pollRef.current = setInterval(async () => {
+      attempts++;
+      if (attempts > 120) { stopPolling(); setGenStatus("error"); setGenError("Превышено время ожидания (10 мин)"); return; }
+      try {
+        const res = await fetch(`${API_CHECK}?taskId=${taskId}`);
+        const data = await res.json();
+        const { status, videoUrl, progress } = data;
+        if (progress != null) setGenProgress(Math.round(progress * 100));
+        if (status === "SUCCEEDED" && videoUrl) {
+          stopPolling();
+          setGenProgress(100);
+          setGenStatus("done");
+          setClip({ videoUrl, prompt: aiPrompt, duration });
+        } else if (status === "FAILED") {
+          stopPolling();
+          setGenStatus("error");
+          setGenError(data.error || "Генерация завершилась с ошибкой");
+        } else {
+          setGenStatus("running");
+        }
+      } catch {
+        /* ignore network errors, keep polling */
+      }
+    }, 5000);
+  }, [aiPrompt, duration, stopPolling]);
+
+  const handleGenerate = async () => {
+    if (!aiPrompt.trim() || genStatus === "pending" || genStatus === "running") return;
+    setGenStatus("pending");
+    setGenProgress(0);
+    setGenError("");
+    setClip(null);
+    try {
+      const res = await fetch(API_GENERATE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: aiPrompt, duration }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setGenStatus("error"); setGenError(data.error || "Ошибка запуска"); return; }
+      setGenStatus("running");
+      pollStatus(data.taskId);
+    } catch (e: any) {
+      setGenStatus("error");
+      setGenError(e.message || "Сетевая ошибка");
+    }
   };
+
+  const isGenerating = genStatus === "pending" || genStatus === "running";
+  const statusLabel = genStatus === "pending" ? "Запуск задачи..." : genStatus === "running" ? `Генерирую видео... ${genProgress}%` : "";
 
   return (
     <div className="flex flex-col h-full gap-4 animate-fade-in">
@@ -67,23 +137,68 @@ function EditorSection() {
         {/* Video Preview */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
           <div className="relative rounded-xl overflow-hidden bg-black border border-white/5 aspect-video flex items-center justify-center group" style={{ minHeight: 240 }}>
-            <div className="absolute inset-0 bg-gradient-to-br from-zinc-900 via-zinc-950 to-black" />
-            {generated && <div className="absolute inset-0 bg-gradient-to-br from-amber-950/30 via-zinc-950 to-violet-950/20 animate-scale-in" />}
-            <div className="relative z-10 flex flex-col items-center gap-3 opacity-40 group-hover:opacity-60 transition-opacity">
-              <Icon name="Play" size={48} className="text-white/30" />
-              <span className="text-xs text-white/30 tracking-widest uppercase" style={{ fontFamily: "'Syne', sans-serif" }}>Предпросмотр</span>
-            </div>
-            {generating && <div className="absolute top-0 h-full w-1 bg-amber-400/60 blur-sm animate-scan z-20" />}
-            <div className="absolute bottom-3 right-3 bg-black/60 px-2 py-0.5 rounded text-xs font-mono text-amber-400/80">
+            {clip ? (
+              <video
+                ref={videoRef}
+                src={clip.videoUrl}
+                className="absolute inset-0 w-full h-full object-cover animate-scale-in"
+                controls={false}
+                loop
+                onClick={() => {
+                  if (videoRef.current) {
+                    if (isPlaying) { videoRef.current.pause(); } else { void videoRef.current.play(); }
+                    setIsPlaying(!isPlaying);
+                  }
+                }}
+              />
+            ) : (
+              <>
+                <div className="absolute inset-0 bg-gradient-to-br from-zinc-900 via-zinc-950 to-black" />
+                <div className="relative z-10 flex flex-col items-center gap-3 opacity-40 group-hover:opacity-60 transition-opacity">
+                  <Icon name="Play" size={48} className="text-white/30" />
+                  <span className="text-xs text-white/30 tracking-widest uppercase" style={{ fontFamily: "'Syne', sans-serif" }}>Предпросмотр</span>
+                </div>
+              </>
+            )}
+            {/* Progress overlay during generation */}
+            {isGenerating && (
+              <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-4 z-20">
+                <div className="absolute top-0 h-full w-1 bg-amber-400/60 blur-sm animate-scan" />
+                <div className="flex flex-col items-center gap-3 relative z-10">
+                  <Icon name="Loader2" size={32} className="text-amber-400 animate-spin" />
+                  <span className="text-sm text-amber-300 font-semibold" style={{ fontFamily: "'Syne', sans-serif" }}>{statusLabel}</span>
+                  <div className="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-500" style={{ width: `${genProgress || 5}%` }} />
+                  </div>
+                  <span className="text-xs text-white/30">Runway ML Gen-3 · {duration} сек</span>
+                </div>
+              </div>
+            )}
+            {/* Play overlay for ready video */}
+            {clip && !isGenerating && (
+              <button
+                onClick={() => {
+                  if (videoRef.current) {
+                    if (isPlaying) { videoRef.current.pause(); } else { void videoRef.current.play(); }
+                    setIsPlaying(!isPlaying);
+                  }
+                }}
+                className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10 bg-black/20"
+              >
+                <div className="w-14 h-14 rounded-full bg-amber-500/80 flex items-center justify-center">
+                  <Icon name={isPlaying ? "Pause" : "Play"} size={22} className="text-black" />
+                </div>
+              </button>
+            )}
+            <div className="absolute bottom-3 right-3 bg-black/60 px-2 py-0.5 rounded text-xs font-mono text-amber-400/80 z-10">
               00:{String(Math.floor(playhead / 10)).padStart(2, '0')}:{String((playhead * 3) % 60).padStart(2, '0')}
             </div>
-            <div className="absolute bottom-3 left-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              {["SkipBack","Play","SkipForward"].map(icon => (
-                <button key={icon} className="w-7 h-7 rounded-lg bg-white/10 hover:bg-amber-500/30 flex items-center justify-center transition-colors">
-                  <Icon name={icon as any} size={13} className="text-white" />
-                </button>
-              ))}
-            </div>
+            {clip && (
+              <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-emerald-500/20 border border-emerald-500/30 rounded-lg px-2 py-1 z-10">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span className="text-[10px] text-emerald-400">Runway Gen-3 · {clip.duration}с</span>
+              </div>
+            )}
           </div>
 
           {/* Transport */}
@@ -114,38 +229,80 @@ function EditorSection() {
                 <Icon name="Sparkles" size={13} className="text-amber-400" />
               </div>
               <span className="text-xs font-semibold tracking-wide text-white/80 uppercase" style={{ fontFamily: "'Syne', sans-serif" }}>ИИ-Генератор</span>
+              <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400/70 border border-amber-500/15">Runway Gen-3</span>
             </div>
             <textarea
               value={aiPrompt}
               onChange={e => setAiPrompt(e.target.value)}
               placeholder="Опишите сцену... Например: «Космический корабль пролетает над тёмной планетой, лучи света разрезают туман»"
-              className="flex-1 bg-white/5 rounded-lg p-3 text-sm text-white/70 placeholder:text-white/20 resize-none border border-white/5 focus:outline-none focus:border-amber-500/30 transition-colors min-h-[100px] scrollbar-thin"
+              className="flex-1 bg-white/5 rounded-lg p-3 text-sm text-white/70 placeholder:text-white/20 resize-none border border-white/5 focus:outline-none focus:border-amber-500/30 transition-colors min-h-[90px] scrollbar-thin"
+              disabled={isGenerating}
             />
+            {/* Duration picker */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-white/30">Длительность</span>
+                <span className="text-[10px] font-mono font-bold text-amber-400">{duration} сек</span>
+              </div>
+              <div className="flex gap-1.5">
+                {[5, 10, 15, 20, 30].map(d => (
+                  <button key={d} onClick={() => setDuration(d)} disabled={isGenerating}
+                    className={`flex-1 py-1 rounded-lg text-[11px] font-semibold border transition-all disabled:opacity-40 ${duration === d ? "bg-amber-500/20 border-amber-500/40 text-amber-400" : "border-white/5 text-white/30 hover:border-white/15 hover:text-white/50"}`}
+                    style={{ fontFamily: "'Syne', sans-serif" }}>
+                    {d}с
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex gap-2 flex-wrap">
-              {["Синяя гамма", "Кино-нуар", "Sci-Fi", "Рассвет"].map(tag => (
+              {["Кино-нуар", "Sci-Fi", "Рассвет", "Слоу-мо"].map(tag => (
                 <button key={tag} onClick={() => setAiPrompt(prev => prev + (prev ? ", " : "") + tag.toLowerCase())}
-                  className="px-2.5 py-1 rounded-full text-xs bg-white/5 hover:bg-amber-500/10 border border-white/5 hover:border-amber-500/20 text-white/40 hover:text-amber-300 transition-all">
+                  disabled={isGenerating}
+                  className="px-2.5 py-1 rounded-full text-xs bg-white/5 hover:bg-amber-500/10 border border-white/5 hover:border-amber-500/20 text-white/40 hover:text-amber-300 transition-all disabled:opacity-40">
                   {tag}
                 </button>
               ))}
             </div>
             <button
               onClick={handleGenerate}
-              disabled={generating || !aiPrompt.trim()}
+              disabled={isGenerating || !aiPrompt.trim()}
               className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed text-black font-bold text-sm tracking-wide transition-all active:scale-95"
               style={{ fontFamily: "'Syne', sans-serif" }}
             >
-              {generating ? (
+              {isGenerating ? (
                 <span className="flex items-center justify-center gap-2">
                   <Icon name="Loader2" size={14} className="animate-spin" />
-                  Генерация...
+                  {statusLabel}
                 </span>
               ) : "✦ Генерировать сцену"}
             </button>
-            {generated && (
-              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-400 flex items-center gap-2 animate-fade-in">
-                <Icon name="CheckCircle2" size={13} />
-                Сцена добавлена на таймлайн
+            {/* Progress bar during generation */}
+            {isGenerating && (
+              <div className="flex flex-col gap-1 animate-fade-in">
+                <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-500"
+                    style={{ width: `${genProgress || 5}%` }} />
+                </div>
+                <span className="text-[10px] text-white/20 text-center">Обычно занимает 1–3 минуты</span>
+              </div>
+            )}
+            {genStatus === "done" && clip && (
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 flex flex-col gap-2 animate-fade-in">
+                <div className="flex items-center gap-2 text-xs text-emerald-400">
+                  <Icon name="CheckCircle2" size={13} />
+                  <span>Видео готово!</span>
+                </div>
+                <a href={clip.videoUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-xs text-emerald-400 transition-all">
+                  <Icon name="Download" size={12} />
+                  Скачать видео
+                </a>
+              </div>
+            )}
+            {genStatus === "error" && (
+              <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 flex items-start gap-2 animate-fade-in">
+                <Icon name="AlertCircle" size={13} className="shrink-0 mt-0.5" />
+                <span>{genError}</span>
               </div>
             )}
           </div>
