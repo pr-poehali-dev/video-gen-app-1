@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Missing chatId",
+      "method": "POST",
+      "path": "/",
+      "body": {"videoUrl": "https://example.com/video.mp4"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "chatId обязателен"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Missing videoUrl",
+      "method": "POST",
+      "path": "/",
+      "body": {"chatId": "123456"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "videoUrl обязателен"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 {
+  "send-to-telegram": "https://functions.poehali.dev/9eccc612-97a3-4548-84ab-17b8b16c323a",
   "generate-text": "https://functions.poehali.dev/9ea548b8-684b-434d-b439-9155c248db4d",
   "check-video": "https://functions.poehali.dev/a4867ee5-4dfc-4ec4-bf50-f3681ee61227",
   "generate-video": "https://functions.poehali.dev/41ee0003-70f4-4f10-9198-9c316970c345"

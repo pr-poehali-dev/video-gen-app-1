@@ -5,6 +5,7 @@ import Icon from "@/components/ui/icon";
 const API_GENERATE = "https://functions.poehali.dev/41ee0003-70f4-4f10-9198-9c316970c345";
 const API_CHECK = "https://functions.poehali.dev/a4867ee5-4dfc-4ec4-bf50-f3681ee61227";
 const API_TEXT = "https://functions.poehali.dev/9ea548b8-684b-434d-b439-9155c248db4d";
+const API_TELEGRAM = "https://functions.poehali.dev/9eccc612-97a3-4548-84ab-17b8b16c323a";
 
 type GenStatus = "idle" | "pending" | "running" | "done" | "error";
 
@@ -1196,16 +1197,55 @@ function SettingsSection() {
   );
 }
 
+type TgSendStatus = "idle" | "sending" | "sent" | "error";
+
 function ExportSection({ editorState, onGoToEditor }: { editorState: EditorState; onGoToEditor: () => void }) {
   const { clip, appliedFilter, appliedTexts, appliedStyle, appliedColor } = editorState;
   const [selected, setSelected] = useState(0);
   const [downloading, setDownloading] = useState(false);
   const [done, setDone] = useState(false);
+  // Telegram state
+  const [tgChatId, setTgChatId] = useState("");
+  const [tgCaption, setTgCaption] = useState("");
+  const [tgStatus, setTgStatus] = useState<TgSendStatus>("idle");
+  const [tgError, setTgError] = useState("");
+  const [tgMethod, setTgMethod] = useState<"video" | "link" | null>(null);
+  const [showTgHelp, setShowTgHelp] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const SF = { fontFamily: "'Syne', sans-serif" };
 
   const filterCss = VIDEO_FILTERS.find(f => f.id === appliedFilter)?.css ?? "none";
   const hasOverlays = appliedTexts.length > 0 || appliedStyle || appliedColor || appliedFilter;
+
+  const handleSendTelegram = async () => {
+    if (!clip || !tgChatId.trim()) return;
+    setTgStatus("sending");
+    setTgError("");
+    setTgMethod(null);
+    try {
+      const res = await fetch(API_TELEGRAM, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatId: tgChatId.trim(),
+          videoUrl: clip.videoUrl,
+          caption: tgCaption.trim(),
+          prompt: clip.prompt,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setTgStatus("error");
+        setTgError(data.error || data.details || "Ошибка отправки");
+        return;
+      }
+      setTgStatus("sent");
+      setTgMethod(data.method);
+    } catch (e: any) {
+      setTgStatus("error");
+      setTgError(e.message || "Сетевая ошибка");
+    }
+  };
 
   const handleExport = async () => {
     if (!clip) return;
@@ -1388,7 +1428,7 @@ function ExportSection({ editorState, onGoToEditor }: { editorState: EditorState
             <button
               onClick={handleExport}
               disabled={downloading}
-              className="mt-auto w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+              className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2"
               style={SF}>
               {downloading ? (
                 <><Icon name="Loader2" size={16} className="animate-spin" />Скачивание...</>
@@ -1396,6 +1436,82 @@ function ExportSection({ editorState, onGoToEditor }: { editorState: EditorState
                 <><Icon name="Download" size={16} />Скачать видео</>
               )}
             </button>
+
+            {/* ── Telegram block ── */}
+            <div className="border-t border-white/5 pt-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-sky-500/15 flex items-center justify-center">
+                    <Icon name="Send" size={13} className="text-sky-400" />
+                  </div>
+                  <span className="text-xs font-semibold text-white/60" style={SF}>Отправить в Telegram</span>
+                </div>
+                <button onClick={() => setShowTgHelp(v => !v)}
+                  className="w-5 h-5 rounded-full border border-white/10 flex items-center justify-center hover:border-sky-500/30 transition-colors">
+                  <Icon name="HelpCircle" size={11} className="text-white/25 hover:text-sky-400" />
+                </button>
+              </div>
+
+              {showTgHelp && (
+                <div className="rounded-xl bg-sky-500/5 border border-sky-500/15 p-3 text-[11px] text-white/40 leading-relaxed animate-fade-in">
+                  <p className="font-semibold text-sky-400/80 mb-1">Как получить Chat ID:</p>
+                  <p>1. Добавьте вашего бота в чат или канал</p>
+                  <p>2. Напишите боту любое сообщение</p>
+                  <p>3. Откройте <span className="text-sky-400">@userinfobot</span> — он покажет ваш ID</p>
+                  <p className="mt-1">Для канала: добавьте бота как администратора и используйте @username канала</p>
+                </div>
+              )}
+
+              <input
+                value={tgChatId}
+                onChange={e => { setTgChatId(e.target.value); setTgStatus("idle"); }}
+                placeholder="Chat ID или @username канала"
+                className="w-full bg-white/5 rounded-xl px-3 py-2.5 text-sm text-white/70 placeholder:text-white/20 border border-white/5 focus:outline-none focus:border-sky-500/40 transition-colors font-mono"
+              />
+
+              <textarea
+                value={tgCaption}
+                onChange={e => setTgCaption(e.target.value)}
+                placeholder="Подпись к видео (необязательно)"
+                rows={2}
+                className="w-full bg-white/5 rounded-xl px-3 py-2 text-sm text-white/70 placeholder:text-white/20 border border-white/5 focus:outline-none focus:border-sky-500/40 transition-colors resize-none scrollbar-thin"
+              />
+
+              {tgStatus === "sent" && (
+                <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 p-3 flex flex-col gap-1 animate-fade-in">
+                  <div className="flex items-center gap-2 text-sm text-sky-300 font-semibold">
+                    <Icon name="CheckCircle2" size={14} />
+                    Отправлено в Telegram!
+                  </div>
+                  <p className="text-[10px] text-white/25">
+                    {tgMethod === "link" ? "Отправлено как ссылка (бот не мог загрузить видео напрямую)" : "Видео загружено напрямую в чат"}
+                  </p>
+                </div>
+              )}
+
+              {tgStatus === "error" && (
+                <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 animate-fade-in">
+                  <div className="flex items-center gap-1.5 font-semibold mb-1">
+                    <Icon name="AlertCircle" size={13} />
+                    Ошибка отправки
+                  </div>
+                  <p className="text-red-400/70 leading-relaxed">{tgError}</p>
+                </div>
+              )}
+
+              <button
+                onClick={handleSendTelegram}
+                disabled={!tgChatId.trim() || tgStatus === "sending"}
+                className="w-full py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-30 disabled:cursor-not-allowed text-white font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+                style={SF}>
+                {tgStatus === "sending" ? (
+                  <><Icon name="Loader2" size={14} className="animate-spin" />Отправляю...</>
+                ) : (
+                  <><Icon name="Send" size={14} />Отправить в Telegram</>
+                )}
+              </button>
+            </div>
+
             <p className="text-[10px] text-white/15 text-center leading-relaxed">
               Видео скачается в оригинальном качестве. CSS-фильтры отображаются в предпросмотре.
             </p>
