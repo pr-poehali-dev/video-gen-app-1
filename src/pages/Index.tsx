@@ -13,6 +13,33 @@ interface GeneratedClip {
   duration: number;
 }
 
+interface SavedProject {
+  id: string;
+  name: string;
+  prompt: string;
+  videoUrl: string;
+  duration: number;
+  savedAt: string; // ISO
+}
+
+const STORAGE_KEY = "frameforge_projects";
+
+function loadProjects(): SavedProject[] {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+}
+function saveProjects(projects: SavedProject[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+}
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays === 0) return `Сегодня, ${d.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}`;
+  if (diffDays === 1) return `Вчера, ${d.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}`;
+  return d.toLocaleDateString("ru", { day: "numeric", month: "short" });
+}
+
 type Section = "editor" | "library" | "projects" | "settings" | "export" | "help";
 
 const NAV_ITEMS: { id: Section; icon: string; label: string }[] = [
@@ -60,7 +87,7 @@ const EXPORT_FORMATS = [
   { fmt: "WebM VP9", res: "1080p", fps: "30fps", size: "~320 MB" },
 ];
 
-function EditorSection() {
+function EditorSection({ onSaveProject }: { onSaveProject: (p: SavedProject) => void }) {
   const [aiPrompt, setAiPrompt] = useState("");
   const [duration, setDuration] = useState(10);
   const [genStatus, setGenStatus] = useState<GenStatus>("idle");
@@ -69,6 +96,9 @@ function EditorSection() {
   const [clip, setClip] = useState<GeneratedClip | null>(null);
   const [playhead, setPlayhead] = useState(33);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [showSaveModal, setShowSaveModal] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -77,6 +107,22 @@ function EditorSection() {
   }, []);
 
   useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const handleSave = () => {
+    if (!clip) return;
+    const name = projectName.trim() || `Сцена: ${clip.prompt.slice(0, 40)}`;
+    const project: SavedProject = {
+      id: crypto.randomUUID(),
+      name,
+      prompt: clip.prompt,
+      videoUrl: clip.videoUrl,
+      duration: clip.duration,
+      savedAt: new Date().toISOString(),
+    };
+    onSaveProject(project);
+    setSaved(true);
+    setShowSaveModal(false);
+  };
 
   const pollStatus = useCallback((taskId: string) => {
     let attempts = 0;
@@ -292,11 +338,48 @@ function EditorSection() {
                   <Icon name="CheckCircle2" size={13} />
                   <span>Видео готово!</span>
                 </div>
-                <a href={clip.videoUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-xs text-emerald-400 transition-all">
-                  <Icon name="Download" size={12} />
-                  Скачать видео
-                </a>
+                {saved ? (
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-400/70">
+                    <Icon name="BookmarkCheck" size={12} />
+                    Сохранено в проекты
+                  </div>
+                ) : showSaveModal ? (
+                  <div className="flex flex-col gap-2 animate-fade-in">
+                    <input
+                      value={projectName}
+                      onChange={e => setProjectName(e.target.value)}
+                      placeholder={`Сцена: ${clip.prompt.slice(0, 30)}...`}
+                      className="w-full bg-white/5 rounded-lg px-3 py-2 text-xs text-white/70 placeholder:text-white/20 border border-white/10 focus:outline-none focus:border-emerald-500/40 transition-colors"
+                      onKeyDown={e => e.key === "Enter" && handleSave()}
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <button onClick={handleSave}
+                        className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold transition-all active:scale-95"
+                        style={{ fontFamily: "'Syne', sans-serif" }}>
+                        Сохранить
+                      </button>
+                      <button onClick={() => setShowSaveModal(false)}
+                        className="px-3 py-1.5 rounded-lg border border-white/10 text-xs text-white/30 hover:text-white/50 transition-all">
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowSaveModal(true)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-xs text-emerald-400 font-semibold transition-all"
+                      style={{ fontFamily: "'Syne', sans-serif" }}>
+                      <Icon name="Bookmark" size={12} />
+                      В проекты
+                    </button>
+                    <a href={clip.videoUrl} target="_blank" rel="noreferrer"
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/8 border border-white/10 text-xs text-white/50 transition-all">
+                      <Icon name="Download" size={12} />
+                      Скачать
+                    </a>
+                  </div>
+                )}
               </div>
             )}
             {genStatus === "error" && (
@@ -412,48 +495,116 @@ function LibrarySection() {
   );
 }
 
-function ProjectsSection() {
+function ProjectsSection({
+  projects,
+  onDelete,
+  onGoToEditor,
+}: {
+  projects: SavedProject[];
+  onDelete: (id: string) => void;
+  onGoToEditor: () => void;
+}) {
+  const [preview, setPreview] = useState<SavedProject | null>(null);
+
   return (
     <div className="flex flex-col h-full gap-5 animate-fade-in">
+      {/* Video preview modal */}
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in"
+          onClick={() => setPreview(null)}>
+          <div className="relative w-full max-w-2xl mx-4 rounded-2xl overflow-hidden border border-white/10 shadow-2xl"
+            onClick={e => e.stopPropagation()}>
+            <video src={preview.videoUrl} controls autoPlay loop className="w-full aspect-video bg-black" />
+            <div className="p-4 bg-[hsl(var(--surface-1))] flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-white/90 text-sm" style={{ fontFamily: "'Syne', sans-serif" }}>{preview.name}</div>
+                <div className="text-xs text-white/30 mt-0.5 line-clamp-1">{preview.prompt}</div>
+              </div>
+              <div className="flex gap-2">
+                <a href={preview.videoUrl} target="_blank" rel="noreferrer" download
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all"
+                  style={{ fontFamily: "'Syne', sans-serif" }}>
+                  <Icon name="Download" size={13} />
+                  Скачать
+                </a>
+                <button onClick={() => setPreview(null)}
+                  className="w-8 h-8 rounded-lg hover:bg-white/5 flex items-center justify-center transition-colors">
+                  <Icon name="X" size={15} className="text-white/50" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "'Syne', sans-serif" }}>Мои проекты</h2>
-          <p className="text-sm text-white/30 mt-1">История работ и сохранённые проекты</p>
+          <p className="text-sm text-white/30 mt-1">
+            Сгенерированные видео · {projects.length} {projects.length === 1 ? "проект" : projects.length < 5 ? "проекта" : "проектов"}
+          </p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-all active:scale-95"
+        <button onClick={onGoToEditor}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-all active:scale-95"
           style={{ fontFamily: "'Syne', sans-serif" }}>
           <Icon name="Plus" size={15} />
-          Новый проект
+          Новая сцена
         </button>
       </div>
-      <div className="flex flex-col gap-3 overflow-y-auto scrollbar-thin pr-1">
-        {PROJECTS.map((proj, i) => (
-          <div key={i} className="glass rounded-xl p-4 flex items-center gap-4 hover:border-amber-500/20 transition-all group cursor-pointer animate-fade-in"
-            style={{ animationDelay: `${i * 0.08}s`, animationFillMode: "both" }}>
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-900/40 to-zinc-900 border border-white/5 flex items-center justify-center shrink-0">
-              <Icon name="Film" size={20} className="text-amber-400/60" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-white/80 group-hover:text-white transition-colors" style={{ fontFamily: "'Syne', sans-serif" }}>{proj.name}</div>
-              <div className="text-xs text-white/30 mt-0.5">Изменён: {proj.modified} · {proj.duration}</div>
-            </div>
-            <div className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
-              proj.status === "active" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-              proj.status === "render" ? "bg-sky-500/10 text-sky-400 border-sky-500/20 animate-pulse-glow" :
-              "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-            }`}>
-              {proj.status === "active" ? "В работе" : proj.status === "render" ? "Рендер..." : "Готов"}
-            </div>
-            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              {["FolderOpen","Copy","Trash2"].map(icon => (
-                <button key={icon} className="w-7 h-7 rounded-lg hover:bg-white/5 flex items-center justify-center transition-colors">
-                  <Icon name={icon as any} size={14} className="text-white/30 hover:text-white/70" />
-                </button>
-              ))}
-            </div>
+
+      {projects.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center animate-fade-in">
+          <div className="w-16 h-16 rounded-2xl bg-white/3 border border-white/5 flex items-center justify-center">
+            <Icon name="Clapperboard" size={28} className="text-white/15" />
           </div>
-        ))}
-      </div>
+          <div>
+            <div className="font-semibold text-white/40 text-sm" style={{ fontFamily: "'Syne', sans-serif" }}>Проектов пока нет</div>
+            <div className="text-xs text-white/20 mt-1">Сгенерируйте первую сцену в редакторе</div>
+          </div>
+          <button onClick={onGoToEditor}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-amber-500/30 text-amber-400 text-sm hover:bg-amber-500/10 transition-all"
+            style={{ fontFamily: "'Syne', sans-serif" }}>
+            <Icon name="Sparkles" size={15} />
+            Открыть редактор
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3 overflow-y-auto scrollbar-thin pr-1">
+          {projects.map((proj, i) => (
+            <div key={proj.id}
+              className="glass rounded-xl p-4 flex items-center gap-4 hover:border-amber-500/20 transition-all group cursor-pointer animate-fade-in"
+              style={{ animationDelay: `${i * 0.06}s`, animationFillMode: "both" }}
+              onClick={() => setPreview(proj)}>
+              {/* Thumbnail / play icon */}
+              <div className="w-14 h-14 rounded-xl overflow-hidden bg-gradient-to-br from-amber-900/40 to-zinc-900 border border-white/5 flex items-center justify-center shrink-0 relative">
+                <video src={proj.videoUrl} className="absolute inset-0 w-full h-full object-cover opacity-70" muted playsInline preload="metadata" />
+                <div className="relative z-10 w-6 h-6 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Icon name="Play" size={11} className="text-white" />
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-white/80 group-hover:text-white transition-colors truncate"
+                  style={{ fontFamily: "'Syne', sans-serif" }}>{proj.name}</div>
+                <div className="text-xs text-white/25 mt-0.5 truncate">{proj.prompt}</div>
+                <div className="text-xs text-white/20 mt-0.5">{formatDate(proj.savedAt)} · {proj.duration} сек · Runway Gen-3</div>
+              </div>
+              <div className="px-2.5 py-1 rounded-full text-xs font-medium border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shrink-0">
+                Готов
+              </div>
+              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                <a href={proj.videoUrl} target="_blank" rel="noreferrer" download
+                  className="w-7 h-7 rounded-lg hover:bg-white/5 flex items-center justify-center transition-colors">
+                  <Icon name="Download" size={14} className="text-white/30 hover:text-amber-400" />
+                </a>
+                <button onClick={() => onDelete(proj.id)}
+                  className="w-7 h-7 rounded-lg hover:bg-red-500/10 flex items-center justify-center transition-colors">
+                  <Icon name="Trash2" size={14} className="text-white/30 hover:text-red-400" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -614,12 +765,38 @@ function HelpSection() {
 
 export default function Index() {
   const [activeSection, setActiveSection] = useState<Section>("editor");
+  const [projects, setProjects] = useState<SavedProject[]>(() => loadProjects());
+  const [newProjectId, setNewProjectId] = useState<string | null>(null);
+
+  const handleSaveProject = useCallback((p: SavedProject) => {
+    setProjects(prev => {
+      const updated = [p, ...prev];
+      saveProjects(updated);
+      return updated;
+    });
+    setNewProjectId(p.id);
+    setTimeout(() => setNewProjectId(null), 3000);
+  }, []);
+
+  const handleDeleteProject = useCallback((id: string) => {
+    setProjects(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      saveProjects(updated);
+      return updated;
+    });
+  }, []);
 
   const renderSection = () => {
     switch (activeSection) {
-      case "editor": return <EditorSection />;
+      case "editor": return <EditorSection onSaveProject={handleSaveProject} />;
       case "library": return <LibrarySection />;
-      case "projects": return <ProjectsSection />;
+      case "projects": return (
+        <ProjectsSection
+          projects={projects}
+          onDelete={handleDeleteProject}
+          onGoToEditor={() => setActiveSection("editor")}
+        />
+      );
       case "settings": return <SettingsSection />;
       case "export": return <ExportSection />;
       case "help": return <HelpSection />;
@@ -646,6 +823,12 @@ export default function Index() {
                 activeSection === item.id ? "bg-amber-500/15 text-amber-400" : "text-white/25 hover:text-white/60 hover:bg-white/5"
               }`}>
               <Icon name={item.icon as any} size={18} />
+              {/* Badge for projects count */}
+              {item.id === "projects" && projects.length > 0 && (
+                <div className="absolute -top-0.5 -right-0.5 min-w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center">
+                  <span className="text-[9px] font-bold text-black px-0.5">{projects.length > 99 ? "99" : projects.length}</span>
+                </div>
+              )}
               {activeSection === item.id && (
                 <div className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-l-full bg-amber-400" />
               )}
@@ -688,6 +871,27 @@ export default function Index() {
           {renderSection()}
         </div>
       </main>
+
+      {/* Save toast notification */}
+      {newProjectId && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-fade-in">
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-[hsl(var(--surface-1))] border border-emerald-500/30 shadow-2xl"
+            style={{ boxShadow: "0 0 30px rgba(52,211,153,0.15)" }}>
+            <div className="w-7 h-7 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+              <Icon name="BookmarkCheck" size={14} className="text-emerald-400" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-white/80" style={{ fontFamily: "'Syne', sans-serif" }}>Проект сохранён</div>
+              <div className="text-xs text-white/30">Доступен в разделе «Проекты»</div>
+            </div>
+            <button onClick={() => setActiveSection("projects")}
+              className="ml-2 px-3 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-xs text-emerald-400 font-semibold transition-all border border-emerald-500/20"
+              style={{ fontFamily: "'Syne', sans-serif" }}>
+              Открыть
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
