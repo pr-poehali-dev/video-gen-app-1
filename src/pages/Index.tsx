@@ -579,23 +579,42 @@ function ToolsPanel({
   );
 }
 
-function EditorSection({ onSaveProject }: { onSaveProject: (p: SavedProject) => void }) {
+interface EditorState {
+  clip: GeneratedClip | null;
+  appliedStyle: string | null;
+  appliedColor: string | null;
+  appliedFilter: string | null;
+  appliedTexts: string[];
+}
+
+function EditorSection({
+  onSaveProject,
+  editorState,
+  onEditorStateChange,
+}: {
+  onSaveProject: (p: SavedProject) => void;
+  editorState: EditorState;
+  onEditorStateChange: (s: Partial<EditorState>) => void;
+}) {
+  const { clip, appliedStyle, appliedColor, appliedFilter, appliedTexts } = editorState;
+  const setClip = (c: GeneratedClip | null) => onEditorStateChange({ clip: c });
+  const setAppliedStyle = (s: string | null) => onEditorStateChange({ appliedStyle: s });
+  const setAppliedColor = (c: string | null) => onEditorStateChange({ appliedColor: c });
+  const setAppliedFilter = (f: string | null) => onEditorStateChange({ appliedFilter: f });
+  const setAppliedTexts = (fn: ((prev: string[]) => string[]) | string[]) =>
+    onEditorStateChange({ appliedTexts: typeof fn === "function" ? fn(appliedTexts) : fn });
+
   const [aiPrompt, setAiPrompt] = useState("");
   const [duration, setDuration] = useState(10);
   const [genStatus, setGenStatus] = useState<GenStatus>("idle");
   const [genProgress, setGenProgress] = useState(0);
   const [genError, setGenError] = useState("");
-  const [clip, setClip] = useState<GeneratedClip | null>(null);
   const [playhead, setPlayhead] = useState(33);
   const [isPlaying, setIsPlaying] = useState(false);
   const [saved, setSaved] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolType>(null);
-  const [appliedStyle, setAppliedStyle] = useState<string | null>(null);
-  const [appliedColor, setAppliedColor] = useState<string | null>(null);
-  const [appliedFilter, setAppliedFilter] = useState<string | null>(null);
-  const [appliedTexts, setAppliedTexts] = useState<string[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -1177,64 +1196,211 @@ function SettingsSection() {
   );
 }
 
-function ExportSection() {
+function ExportSection({ editorState, onGoToEditor }: { editorState: EditorState; onGoToEditor: () => void }) {
+  const { clip, appliedFilter, appliedTexts, appliedStyle, appliedColor } = editorState;
   const [selected, setSelected] = useState(0);
-  const [exporting, setExporting] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+  const [done, setDone] = useState(false);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const SF = { fontFamily: "'Syne', sans-serif" };
 
-  const startExport = () => {
-    setExporting(true);
-    setProgress(0);
-    const interval = setInterval(() => {
-      setProgress(p => {
-        if (p >= 100) { clearInterval(interval); setExporting(false); return 100; }
-        return p + 2;
-      });
-    }, 80);
+  const filterCss = VIDEO_FILTERS.find(f => f.id === appliedFilter)?.css ?? "none";
+  const hasOverlays = appliedTexts.length > 0 || appliedStyle || appliedColor || appliedFilter;
+
+  const handleExport = async () => {
+    if (!clip) return;
+    setDownloading(true);
+    setDone(false);
+    try {
+      const res = await fetch(clip.videoUrl);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `export_${Date.now()}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setDone(true);
+    } finally {
+      setDownloading(false);
+    }
   };
 
+  const appliedCount = [appliedFilter, appliedStyle, appliedColor].filter(Boolean).length + appliedTexts.length;
+
   return (
-    <div className="flex flex-col h-full gap-5 animate-fade-in">
+    <div className="flex flex-col h-full gap-5 animate-fade-in overflow-y-auto scrollbar-thin pr-1">
       <div>
-        <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "'Syne', sans-serif" }}>Экспорт</h2>
-        <p className="text-sm text-white/30 mt-1">Выберите формат и качество для сохранения видео</p>
+        <h2 className="text-2xl font-bold text-white" style={SF}>Экспорт</h2>
+        <p className="text-sm text-white/30 mt-1">Предпросмотр с оверлеями и скачивание финального видео</p>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        {EXPORT_FORMATS.map((f, i) => (
-          <button key={i} onClick={() => setSelected(i)}
-            className={`glass rounded-xl p-4 text-left border transition-all hover:scale-[1.01] ${selected===i ? "border-amber-500/40 bg-amber-500/5" : "border-white/5 hover:border-white/10"}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-bold text-sm text-white/80" style={{ fontFamily: "'Syne', sans-serif" }}>{f.fmt}</span>
-              {selected===i && <Icon name="CheckCircle2" size={15} className="text-amber-400" />}
-            </div>
-            <div className="text-xs text-white/30">{f.res} · {f.fps}</div>
-            <div className="text-xs text-amber-400/60 mt-1">{f.size}</div>
+
+      {!clip ? (
+        /* ── No clip yet ── */
+        <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center">
+          <div className="w-20 h-20 rounded-2xl bg-white/3 border border-white/5 flex items-center justify-center">
+            <Icon name="VideoOff" size={32} className="text-white/15" />
+          </div>
+          <div>
+            <div className="font-semibold text-white/40 text-base" style={SF}>Видео ещё не сгенерировано</div>
+            <div className="text-sm text-white/20 mt-1">Создайте сцену в редакторе, чтобы экспортировать</div>
+          </div>
+          <button onClick={onGoToEditor}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-all active:scale-95" style={SF}>
+            <Icon name="Sparkles" size={16} />
+            Перейти в редактор
           </button>
-        ))}
-      </div>
-      {exporting ? (
-        <div className="glass rounded-xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-white/70" style={{ fontFamily: "'Syne', sans-serif" }}>Экспорт видео...</span>
-            <span className="text-sm font-mono text-amber-400">{progress}%</span>
-          </div>
-          <div className="h-2 bg-white/5 rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-100" style={{ width: `${progress}%` }} />
-          </div>
-          {progress === 100 && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-emerald-400 animate-fade-in">
-              <Icon name="CheckCircle2" size={15} />
-              Видео успешно экспортировано!
-            </div>
-          )}
         </div>
       ) : (
-        <button onClick={startExport}
-          className="mt-auto py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-base tracking-wide transition-all active:scale-95 flex items-center justify-center gap-2"
-          style={{ fontFamily: "'Syne', sans-serif" }}>
-          <Icon name="Download" size={18} />
-          Экспортировать видео
-        </button>
+        <div className="flex gap-5 flex-1 min-h-0">
+          {/* ── Left: preview ── */}
+          <div className="flex-1 flex flex-col gap-4 min-w-0">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-white/30 font-medium" style={SF}>Предпросмотр с применёнными эффектами</span>
+              {appliedCount > 0 && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
+                  <Icon name="Layers" size={11} className="text-amber-400" />
+                  <span className="text-[10px] text-amber-400 font-semibold">{appliedCount} эффект{appliedCount > 1 ? "а" : ""}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Video preview with filters + text overlays */}
+            <div className="relative rounded-xl overflow-hidden bg-black border border-white/5 aspect-video">
+              <video
+                ref={previewVideoRef}
+                src={clip.videoUrl}
+                className="w-full h-full object-cover"
+                style={{ filter: filterCss }}
+                autoPlay
+                loop
+                muted
+                playsInline
+              />
+              {/* Color overlay */}
+              {appliedColor && !appliedColor.startsWith("sound:") && (
+                <div className="absolute inset-0 mix-blend-color opacity-30 pointer-events-none"
+                  style={{ background: appliedColor }} />
+              )}
+              {/* Text overlays */}
+              {appliedTexts.map((t, i) => (
+                <div key={i}
+                  className="absolute left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-black/50 backdrop-blur-sm text-white font-bold text-sm text-center max-w-[80%] pointer-events-none"
+                  style={{
+                    bottom: `${16 + i * 48}px`,
+                    fontFamily: "'Syne', sans-serif",
+                    textShadow: "0 2px 8px rgba(0,0,0,0.8)",
+                  }}>
+                  {t}
+                </div>
+              ))}
+              {/* Style badge */}
+              {appliedStyle && (
+                <div className="absolute top-3 left-3 px-2 py-1 rounded-lg bg-black/60 border border-amber-500/30 text-[10px] text-amber-400 pointer-events-none">
+                  {PRESET_STYLES.find(s => s.id === appliedStyle)?.label || appliedStyle.replace("custom:", "")}
+                </div>
+              )}
+              {/* Watermark-free badge */}
+              <div className="absolute top-3 right-3 px-2 py-1 rounded-lg bg-black/60 text-[9px] text-white/30 pointer-events-none">
+                Runway Gen-3 · {clip.duration}с
+              </div>
+            </div>
+
+            {/* Applied effects summary */}
+            {hasOverlays && (
+              <div className="glass rounded-xl p-4 flex flex-col gap-3 animate-fade-in">
+                <span className="text-xs text-white/40 font-semibold" style={SF}>Применено к видео</span>
+                <div className="flex flex-wrap gap-2">
+                  {appliedStyle && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-violet-500/20 bg-violet-500/10 text-xs text-violet-300">
+                      <Icon name="Wand2" size={11} />
+                      {PRESET_STYLES.find(s => s.id === appliedStyle)?.label || "Свой стиль"}
+                    </div>
+                  )}
+                  {appliedFilter && appliedFilter !== "none" && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-sky-500/20 bg-sky-500/10 text-xs text-sky-300">
+                      <Icon name="Sliders" size={11} />
+                      {VIDEO_FILTERS.find(f => f.id === appliedFilter)?.label}
+                    </div>
+                  )}
+                  {appliedColor && !appliedColor.startsWith("sound:") && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-pink-500/20 bg-pink-500/10 text-xs text-pink-300">
+                      <div className="w-2.5 h-2.5 rounded-full border border-white/20" style={{ background: appliedColor }} />
+                      Цвет
+                    </div>
+                  )}
+                  {appliedTexts.map((t, i) => (
+                    <div key={i} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-amber-500/20 bg-amber-500/10 text-xs text-amber-300 max-w-[200px]">
+                      <Icon name="Type" size={11} />
+                      <span className="truncate">{t}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Right: format + download ── */}
+          <div className="w-64 flex flex-col gap-4 shrink-0">
+            <div>
+              <p className="text-xs text-white/30 mb-3" style={SF}>Формат экспорта</p>
+              <div className="flex flex-col gap-2">
+                {EXPORT_FORMATS.map((f, i) => (
+                  <button key={i} onClick={() => setSelected(i)}
+                    className={`glass rounded-xl p-3 text-left border transition-all ${selected === i ? "border-amber-500/40 bg-amber-500/5" : "border-white/5 hover:border-white/10"}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-white/80" style={SF}>{f.fmt}</span>
+                      {selected === i && <Icon name="CheckCircle2" size={13} className="text-amber-400" />}
+                    </div>
+                    <div className="text-[10px] text-white/25 mt-0.5">{f.res} · {f.fps}</div>
+                    <div className="text-[10px] text-amber-400/50 mt-0.5">{f.size}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Download info */}
+            <div className="glass rounded-xl p-3 flex flex-col gap-2">
+              <span className="text-xs text-white/30" style={SF}>Что войдёт в экспорт</span>
+              {[
+                { label: "Видео Runway Gen-3", ok: true },
+                { label: `Фильтр: ${VIDEO_FILTERS.find(f => f.id === appliedFilter)?.label ?? "нет"}`, ok: !!appliedFilter && appliedFilter !== "none" },
+                { label: `Стиль: ${PRESET_STYLES.find(s => s.id === appliedStyle)?.label ?? "нет"}`, ok: !!appliedStyle },
+                { label: `Текстовых оверлеев: ${appliedTexts.length}`, ok: appliedTexts.length > 0 },
+                { label: "Цветовой оверлей", ok: !!appliedColor && !appliedColor.startsWith("sound:") },
+              ].map(({ label, ok }) => (
+                <div key={label} className="flex items-center gap-2">
+                  <Icon name={ok ? "CheckCircle2" : "Circle"} size={12} className={ok ? "text-emerald-400" : "text-white/15"} />
+                  <span className={`text-[11px] ${ok ? "text-white/60" : "text-white/20"}`}>{label}</span>
+                </div>
+              ))}
+            </div>
+
+            {done && (
+              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 flex items-center gap-2 text-sm text-emerald-400 animate-fade-in">
+                <Icon name="CheckCircle2" size={15} />
+                Готово! Файл сохранён.
+              </div>
+            )}
+
+            <button
+              onClick={handleExport}
+              disabled={downloading}
+              className="mt-auto w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+              style={SF}>
+              {downloading ? (
+                <><Icon name="Loader2" size={16} className="animate-spin" />Скачивание...</>
+              ) : (
+                <><Icon name="Download" size={16} />Скачать видео</>
+              )}
+            </button>
+            <p className="text-[10px] text-white/15 text-center leading-relaxed">
+              Видео скачается в оригинальном качестве. CSS-фильтры отображаются в предпросмотре.
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1283,6 +1449,17 @@ export default function Index() {
   const [activeSection, setActiveSection] = useState<Section>("editor");
   const [projects, setProjects] = useState<SavedProject[]>(() => loadProjects());
   const [newProjectId, setNewProjectId] = useState<string | null>(null);
+  const [editorState, setEditorState] = useState<EditorState>({
+    clip: null,
+    appliedStyle: null,
+    appliedColor: null,
+    appliedFilter: null,
+    appliedTexts: [],
+  });
+
+  const handleEditorStateChange = useCallback((patch: Partial<EditorState>) => {
+    setEditorState(prev => ({ ...prev, ...patch }));
+  }, []);
 
   const handleSaveProject = useCallback((p: SavedProject) => {
     setProjects(prev => {
@@ -1304,7 +1481,13 @@ export default function Index() {
 
   const renderSection = () => {
     switch (activeSection) {
-      case "editor": return <EditorSection onSaveProject={handleSaveProject} />;
+      case "editor": return (
+        <EditorSection
+          onSaveProject={handleSaveProject}
+          editorState={editorState}
+          onEditorStateChange={handleEditorStateChange}
+        />
+      );
       case "library": return <LibrarySection />;
       case "projects": return (
         <ProjectsSection
@@ -1314,7 +1497,12 @@ export default function Index() {
         />
       );
       case "settings": return <SettingsSection />;
-      case "export": return <ExportSection />;
+      case "export": return (
+        <ExportSection
+          editorState={editorState}
+          onGoToEditor={() => setActiveSection("editor")}
+        />
+      );
       case "help": return <HelpSection />;
     }
   };
@@ -1374,6 +1562,15 @@ export default function Index() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {editorState.clip && activeSection === "editor" && (
+              <button
+                onClick={() => setActiveSection("export")}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all active:scale-95 animate-fade-in"
+                style={{ fontFamily: "'Syne', sans-serif" }}>
+                <Icon name="Download" size={13} />
+                Экспорт
+              </button>
+            )}
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-xs text-emerald-400" style={{ fontFamily: "'Syne', sans-serif" }}>ИИ готов</span>
