@@ -592,10 +592,14 @@ function EditorSection({
   onSaveProject,
   editorState,
   onEditorStateChange,
+  pendingPrompt,
+  onPendingPromptUsed,
 }: {
   onSaveProject: (p: SavedProject) => void;
   editorState: EditorState;
   onEditorStateChange: (s: Partial<EditorState>) => void;
+  pendingPrompt: string | null;
+  onPendingPromptUsed: () => void;
 }) {
   const { clip, appliedStyle, appliedColor, appliedFilter, appliedTexts } = editorState;
   const setClip = (c: GeneratedClip | null) => onEditorStateChange({ clip: c });
@@ -607,6 +611,14 @@ function EditorSection({
 
   const [aiPrompt, setAiPrompt] = useState("");
   const [duration, setDuration] = useState(10);
+
+  // Apply pending prompt from Library
+  useEffect(() => {
+    if (pendingPrompt) {
+      setAiPrompt(pendingPrompt);
+      onPendingPromptUsed();
+    }
+  }, [pendingPrompt, onPendingPromptUsed]);
   const [genStatus, setGenStatus] = useState<GenStatus>("idle");
   const [genProgress, setGenProgress] = useState(0);
   const [genError, setGenError] = useState("");
@@ -989,44 +1001,138 @@ function EditorSection({
   );
 }
 
-function LibrarySection() {
-  const [tab, setTab] = useState<"templates"|"effects"|"scenes">("templates");
+const EFFECTS_LIBRARY = [
+  { id: "glitch",      name: "Глитч",           desc: "Цифровые помехи, RGB-смещение",   icon: "Zap",        color: "from-violet-900/50 to-purple-950/70",  tag: "Популярный" },
+  { id: "bloom",       name: "Блум",             desc: "Мягкое свечение ярких областей",  icon: "Sun",        color: "from-amber-900/40 to-yellow-950/60",   tag: "Новый" },
+  { id: "vhs",         name: "VHS",              desc: "Ретро-кассетные помехи",           icon: "Tv",         color: "from-teal-900/40 to-cyan-950/60",      tag: "Ретро" },
+  { id: "dust",        name: "Пыль и царапины",  desc: "Плёночный эффект старого кино",   icon: "Film",       color: "from-stone-800/50 to-zinc-900/70",     tag: "" },
+  { id: "rain",        name: "Дождь",            desc: "Капли воды на стекле",            icon: "CloudRain",  color: "from-slate-800/50 to-blue-950/60",     tag: "" },
+  { id: "particles",   name: "Частицы",          desc: "Светящиеся плавающие частицы",    icon: "Sparkles",   color: "from-indigo-900/40 to-violet-950/60",  tag: "Популярный" },
+  { id: "lens_flare",  name: "Блик объектива",   desc: "Солнечные лучи и блики",          icon: "Aperture",   color: "from-orange-900/40 to-amber-950/60",   tag: "" },
+  { id: "freeze",      name: "Заморозка кадра",  desc: "Стоп-кадр с плавным выходом",    icon: "Pause",      color: "from-sky-900/40 to-blue-950/60",       tag: "Новый" },
+  { id: "mirror",      name: "Зеркало",          desc: "Горизонтальное или вертикальное", icon: "FlipHorizontal", color: "from-emerald-900/40 to-green-950/60", tag: "" },
+];
+
+const SCENES_LIBRARY = [
+  { name: "Городской пейзаж на закате",    prompt: "Aerial view of a city at sunset, golden hour, cinematic",            dur: "10с", style: "Кино",       color: "from-orange-900/50 to-red-950/70" },
+  { name: "Космическая туманность",         prompt: "Deep space nebula with swirling colors, stars, 4K",                  dur: "15с", style: "Sci-Fi",     color: "from-violet-900/50 to-indigo-950/70" },
+  { name: "Горный водопад",                prompt: "Majestic waterfall in green mountains, slow motion, nature",         dur: "10с", style: "Природа",    color: "from-emerald-900/50 to-teal-950/70" },
+  { name: "Шторм над океаном",             prompt: "Stormy ocean waves at night, lightning, dramatic cinematic",        dur: "10с", style: "Драма",      color: "from-slate-800/50 to-blue-950/70" },
+  { name: "Неоновый киберпанк-город",      prompt: "Cyberpunk city rain neon lights reflection night cinematic",        dur: "15с", style: "Киберпанк",  color: "from-pink-900/50 to-purple-950/70" },
+  { name: "Заснеженный лес",              prompt: "Snowy forest winter morning mist sunrays cinematic slow motion",    dur: "10с", style: "Природа",    color: "from-sky-900/40 to-blue-950/60" },
+];
+
+function LibrarySection({ onUsePrompt }: { onUsePrompt?: (prompt: string) => void }) {
+  const [tab, setTab] = useState<"templates" | "effects" | "scenes">("templates");
+  const [activeEffect, setActiveEffect] = useState<string | null>(null);
+  const SF = { fontFamily: "'Syne', sans-serif" };
+
   return (
     <div className="flex flex-col h-full gap-5 animate-fade-in">
       <div>
-        <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "'Syne', sans-serif" }}>Библиотека</h2>
+        <h2 className="text-2xl font-bold text-white" style={SF}>Библиотека</h2>
         <p className="text-sm text-white/30 mt-1">Шаблоны, эффекты и готовые сцены для ваших проектов</p>
       </div>
       <div className="flex gap-1 p-1 bg-white/5 rounded-xl w-fit">
-        {(["templates","effects","scenes"] as const).map(t => (
+        {(["templates", "effects", "scenes"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${tab===t ? "bg-amber-500 text-black" : "text-white/40 hover:text-white/70"}`}
-            style={{ fontFamily: "'Syne', sans-serif" }}>
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-amber-500 text-black" : "text-white/40 hover:text-white/70"}`}
+            style={SF}>
             {t === "templates" ? "Шаблоны" : t === "effects" ? "Эффекты" : "Сцены"}
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-3 gap-4 overflow-y-auto scrollbar-thin pr-1">
-        {TEMPLATES.map((tmpl, i) => (
-          <div key={i} className={`relative rounded-xl overflow-hidden bg-gradient-to-br ${tmpl.color} border border-white/5 hover:border-amber-500/30 group cursor-pointer transition-all hover:scale-[1.02] animate-fade-in`}
-            style={{ animationDelay: `${i * 0.07}s`, animationFillMode: "both" }}>
-            <div className="aspect-video flex items-center justify-center">
-              <Icon name="Play" size={28} className="text-white/20 group-hover:text-white/60 transition-colors" />
+
+      {/* ── Templates ── */}
+      {tab === "templates" && (
+        <div className="grid grid-cols-3 gap-4 overflow-y-auto scrollbar-thin pr-1">
+          {TEMPLATES.map((tmpl, i) => (
+            <div key={i} className={`relative rounded-xl overflow-hidden bg-gradient-to-br ${tmpl.color} border border-white/5 hover:border-amber-500/30 group cursor-pointer transition-all hover:scale-[1.02] animate-fade-in`}
+              style={{ animationDelay: `${i * 0.07}s`, animationFillMode: "both" }}>
+              <div className="aspect-video flex items-center justify-center">
+                <Icon name="Play" size={28} className="text-white/20 group-hover:text-white/60 transition-colors" />
+              </div>
+              <div className="p-3 border-t border-white/5">
+                <div className="font-semibold text-sm text-white/80" style={SF}>{tmpl.name}</div>
+                <div className="flex gap-1.5 mt-1.5">
+                  {tmpl.tags.map(tag => (
+                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20">{tag}</span>
+                  ))}
+                </div>
+              </div>
+              <button className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-black/40 hover:bg-amber-500 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all">
+                <Icon name="Plus" size={13} className="text-white" />
+              </button>
             </div>
-            <div className="p-3 border-t border-white/5">
-              <div className="font-semibold text-sm text-white/80" style={{ fontFamily: "'Syne', sans-serif" }}>{tmpl.name}</div>
-              <div className="flex gap-1.5 mt-1.5">
-                {tmpl.tags.map(tag => (
-                  <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20">{tag}</span>
-                ))}
+          ))}
+        </div>
+      )}
+
+      {/* ── Effects ── */}
+      {tab === "effects" && (
+        <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1">
+          <p className="text-xs text-white/25">Нажмите на эффект, чтобы увидеть подробности и добавить в сцену</p>
+          <div className="grid grid-cols-3 gap-3">
+            {EFFECTS_LIBRARY.map((ef, i) => (
+              <button key={ef.id} onClick={() => setActiveEffect(activeEffect === ef.id ? null : ef.id)}
+                className={`relative rounded-xl overflow-hidden bg-gradient-to-br ${ef.color} border transition-all hover:scale-[1.02] text-left group animate-fade-in
+                  ${activeEffect === ef.id ? "border-amber-500/50 scale-[1.02]" : "border-white/5 hover:border-amber-500/25"}`}
+                style={{ animationDelay: `${i * 0.05}s`, animationFillMode: "both" }}>
+                <div className="p-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div className="w-9 h-9 rounded-xl bg-black/30 border border-white/10 flex items-center justify-center">
+                      <Icon name={ef.icon as any} size={18} className="text-white/60 group-hover:text-white transition-colors" />
+                    </div>
+                    {ef.tag && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/20" style={SF}>{ef.tag}</span>
+                    )}
+                  </div>
+                  <div className="font-semibold text-sm text-white/80 group-hover:text-white transition-colors" style={SF}>{ef.name}</div>
+                  <div className="text-[10px] text-white/30 leading-tight">{ef.desc}</div>
+                </div>
+                {activeEffect === ef.id && (
+                  <div className="px-3 pb-3 animate-fade-in">
+                    <button className="w-full py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all" style={SF}>
+                      + Добавить в сцену
+                    </button>
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Scenes ── */}
+      {tab === "scenes" && (
+        <div className="flex flex-col gap-3 overflow-y-auto scrollbar-thin pr-1">
+          <p className="text-xs text-white/25">Готовые промпты для генерации через Runway Gen-3 — откройте в редакторе одним кликом</p>
+          {SCENES_LIBRARY.map((sc, i) => (
+            <div key={i} className={`relative rounded-xl overflow-hidden bg-gradient-to-r ${sc.color} border border-white/5 hover:border-amber-500/30 group transition-all animate-fade-in`}
+              style={{ animationDelay: `${i * 0.06}s`, animationFillMode: "both" }}>
+              <div className="p-4 flex items-center gap-4">
+                <div className="w-16 h-12 rounded-lg bg-black/30 border border-white/10 flex items-center justify-center shrink-0">
+                  <Icon name="Film" size={20} className="text-white/20 group-hover:text-white/50 transition-colors" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm text-white/80 group-hover:text-white transition-colors" style={SF}>{sc.name}</div>
+                  <div className="text-[10px] text-white/25 mt-1 truncate italic">"{sc.prompt}"</div>
+                  <div className="flex gap-2 mt-2">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20">{sc.style}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-white/30 border border-white/5">{sc.dur}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onUsePrompt?.(sc.prompt)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all active:scale-95 opacity-0 group-hover:opacity-100 shrink-0" style={SF}>
+                  <Icon name="Sparkles" size={12} />
+                  Открыть
+                </button>
               </div>
             </div>
-            <button className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-black/40 hover:bg-amber-500 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all">
-              <Icon name="Plus" size={13} className="text-white" />
-            </button>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1145,53 +1251,184 @@ function ProjectsSection({
   );
 }
 
+const SETTINGS_KEY = "frameforge_settings";
+interface AppSettings { name: string; email: string; aiModel: number; quality: number; defaultDuration: number; autoSave: boolean; notifications: boolean; }
+function loadSettings(): AppSettings {
+  try { return { name: "Алексей Новиков", email: "alex@example.com", aiModel: 0, quality: 80, defaultDuration: 10, autoSave: true, notifications: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") }; } catch { return { name: "", email: "", aiModel: 0, quality: 80, defaultDuration: 10, autoSave: true, notifications: true }; }
+}
+
 function SettingsSection() {
-  const [aiModel, setAiModel] = useState(0);
-  const [quality, setQuality] = useState(80);
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [editing, setEditing] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const SF = { fontFamily: "'Syne', sans-serif" };
+
+  const update = (patch: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...patch }));
+
+  const handleSave = () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    setSaved(true);
+    setEditing(false);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const initials = settings.name.trim().split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) || "?";
+  const usedCredits = 47;
+  const totalCredits = 300;
 
   return (
     <div className="flex flex-col h-full gap-5 overflow-y-auto scrollbar-thin pr-1 animate-fade-in">
-      <div>
-        <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "'Syne', sans-serif" }}>Настройки</h2>
-        <p className="text-sm text-white/30 mt-1">Профиль, параметры ИИ и конфигурация</p>
-      </div>
-      <div className="glass rounded-xl p-5">
-        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-4" style={{ fontFamily: "'Syne', sans-serif" }}>Профиль</h3>
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center font-bold text-xl text-black" style={{ fontFamily: "'Syne', sans-serif" }}>A</div>
-          <div>
-            <div className="font-semibold text-white" style={{ fontFamily: "'Syne', sans-serif" }}>Алексей Новиков</div>
-            <div className="text-sm text-white/30">Pro-план · 240 кредитов ИИ</div>
-          </div>
-          <button className="ml-auto px-3 py-1.5 rounded-lg border border-white/10 text-xs text-white/40 hover:border-amber-500/30 hover:text-amber-400 transition-all">Редактировать</button>
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white" style={SF}>Настройки</h2>
+          <p className="text-sm text-white/30 mt-1">Профиль, параметры ИИ и конфигурация</p>
         </div>
+        {saved && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 animate-fade-in" style={SF}>
+            <Icon name="CheckCircle2" size={13} /> Сохранено
+          </div>
+        )}
       </div>
+
+      {/* Profile */}
+      <div className="glass rounded-xl p-5 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest" style={SF}>Профиль</h3>
+          <button onClick={() => setEditing(e => !e)}
+            className="px-3 py-1 rounded-lg border border-white/10 text-xs text-white/40 hover:border-amber-500/30 hover:text-amber-400 transition-all flex items-center gap-1.5">
+            <Icon name={editing ? "X" : "Pencil"} size={11} />
+            {editing ? "Отмена" : "Редактировать"}
+          </button>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center font-bold text-xl text-black shrink-0" style={SF}>
+            {initials}
+          </div>
+          {editing ? (
+            <div className="flex-1 flex flex-col gap-2">
+              <input value={settings.name} onChange={e => update({ name: e.target.value })} placeholder="Ваше имя"
+                className="w-full bg-white/5 rounded-lg px-3 py-2 text-sm text-white/80 border border-white/10 focus:outline-none focus:border-amber-500/30 transition-colors" />
+              <input value={settings.email} onChange={e => update({ email: e.target.value })} placeholder="Email"
+                className="w-full bg-white/5 rounded-lg px-3 py-2 text-sm text-white/80 border border-white/10 focus:outline-none focus:border-amber-500/30 transition-colors" type="email" />
+            </div>
+          ) : (
+            <div>
+              <div className="font-semibold text-white" style={SF}>{settings.name || "—"}</div>
+              <div className="text-sm text-white/30 mt-0.5">{settings.email || "Почта не указана"}</div>
+            </div>
+          )}
+        </div>
+        {/* Usage bar */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="text-white/30">Использовано кредитов ИИ</span>
+            <span className="text-amber-400 font-mono">{usedCredits} / {totalCredits}</span>
+          </div>
+          <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all" style={{ width: `${(usedCredits / totalCredits) * 100}%` }} />
+          </div>
+          <span className="text-[10px] text-white/20">Pro-план · обновление через 14 дней</span>
+        </div>
+        {editing && (
+          <button onClick={handleSave}
+            className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-all active:scale-95" style={SF}>
+            Сохранить изменения
+          </button>
+        )}
+      </div>
+
+      {/* AI model */}
       <div className="glass rounded-xl p-5">
-        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-4" style={{ fontFamily: "'Syne', sans-serif" }}>Модель ИИ</h3>
+        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-4" style={SF}>Модель ИИ по умолчанию</h3>
         <div className="flex flex-col gap-2">
           {AI_MODELS.map((m, i) => (
-            <button key={i} onClick={() => setAiModel(i)}
-              className={`flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${aiModel===i ? "border-amber-500/40 bg-amber-500/5" : "border-white/5 hover:border-white/10"}`}>
-              <div className={`w-3 h-3 rounded-full border-2 ${aiModel===i ? "border-amber-500 bg-amber-500" : "border-white/20"} transition-colors shrink-0`} />
-              <div>
-                <div className={`text-sm font-semibold ${aiModel===i ? "text-amber-400" : "text-white/60"}`} style={{ fontFamily: "'Syne', sans-serif" }}>{m.name}</div>
+            <button key={i} onClick={() => { update({ aiModel: i }); handleSave(); }}
+              className={`flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${settings.aiModel === i ? "border-amber-500/40 bg-amber-500/5" : "border-white/5 hover:border-white/10"}`}>
+              <div className={`w-3 h-3 rounded-full border-2 shrink-0 transition-colors ${settings.aiModel === i ? "border-amber-500 bg-amber-500" : "border-white/20"}`} />
+              <div className="flex-1">
+                <div className={`text-sm font-semibold transition-colors ${settings.aiModel === i ? "text-amber-400" : "text-white/60"}`} style={SF}>{m.name}</div>
                 <div className="text-xs text-white/25 mt-0.5">{m.desc}</div>
               </div>
+              {settings.aiModel === i && <Icon name="CheckCircle2" size={14} className="text-amber-400 shrink-0" />}
             </button>
           ))}
         </div>
       </div>
-      <div className="glass rounded-xl p-5">
-        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-4" style={{ fontFamily: "'Syne', sans-serif" }}>Качество рендера</h3>
-        <div className="flex items-center gap-4">
-          <input type="range" min={20} max={100} value={quality} onChange={e => setQuality(+e.target.value)}
-            className="flex-1 accent-amber-500 cursor-pointer" />
-          <span className="text-sm font-mono font-bold text-amber-400 w-10 text-right">{quality}%</span>
+
+      {/* Render quality + duration */}
+      <div className="glass rounded-xl p-5 flex flex-col gap-5">
+        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest" style={SF}>Параметры генерации</h3>
+        <div>
+          <div className="flex justify-between mb-2">
+            <span className="text-sm text-white/50">Качество рендера</span>
+            <span className="text-sm font-mono font-bold text-amber-400">{settings.quality}%</span>
+          </div>
+          <input type="range" min={20} max={100} value={settings.quality}
+            onChange={e => update({ quality: +e.target.value })}
+            onMouseUp={handleSave}
+            className="w-full accent-amber-500 cursor-pointer" />
+          <div className="flex justify-between mt-1">
+            <span className="text-[10px] text-white/20">Быстро</span>
+            <span className="text-[10px] text-white/20">Максимум</span>
+          </div>
         </div>
-        <div className="flex justify-between mt-2">
-          <span className="text-[10px] text-white/20">Быстро</span>
-          <span className="text-[10px] text-white/20">Максимум</span>
+        <div>
+          <div className="flex justify-between mb-2">
+            <span className="text-sm text-white/50">Длительность по умолчанию</span>
+            <span className="text-sm font-mono font-bold text-amber-400">{settings.defaultDuration} сек</span>
+          </div>
+          <div className="flex gap-2">
+            {[5, 10, 15, 20, 30].map(d => (
+              <button key={d} onClick={() => { update({ defaultDuration: d }); handleSave(); }}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${settings.defaultDuration === d ? "bg-amber-500/20 border-amber-500/40 text-amber-400" : "border-white/5 text-white/30 hover:border-white/15"}`} style={SF}>
+                {d}с
+              </button>
+            ))}
+          </div>
         </div>
+      </div>
+
+      {/* Toggles */}
+      <div className="glass rounded-xl p-5 flex flex-col gap-4">
+        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest" style={SF}>Поведение</h3>
+        {([
+          { key: "autoSave" as const, label: "Автосохранение проектов", desc: "Сохранять готовые видео в список проектов автоматически" },
+          { key: "notifications" as const, label: "Уведомления", desc: "Показывать тост при завершении генерации" },
+        ] as const).map(({ key, label, desc }) => (
+          <div key={key} className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm text-white/60" style={SF}>{label}</div>
+              <div className="text-xs text-white/25 mt-0.5">{desc}</div>
+            </div>
+            <button onClick={() => { update({ [key]: !settings[key] }); handleSave(); }}
+              className={`w-10 h-5 rounded-full transition-all shrink-0 relative ${settings[key] ? "bg-amber-500" : "bg-white/10"}`}>
+              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${settings[key] ? "left-5" : "left-0.5"}`} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Integrations */}
+      <div className="glass rounded-xl p-5 flex flex-col gap-3">
+        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-widest" style={SF}>Интеграции</h3>
+        {[
+          { name: "Runway ML Gen-3", desc: "Генерация видео", icon: "Clapperboard", connected: true, color: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
+          { name: "OpenAI GPT-4o-mini", desc: "ИИ-генерация текста", icon: "Sparkles", connected: true, color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" },
+          { name: "Telegram Bot", desc: "Отправка видео в чат", icon: "Send", connected: false, color: "text-sky-400 bg-sky-500/10 border-sky-500/20" },
+        ].map(s => (
+          <div key={s.name} className="flex items-center gap-3 p-3 rounded-xl border border-white/5">
+            <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${s.color}`}>
+              <Icon name={s.icon as any} size={15} />
+            </div>
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-white/70" style={SF}>{s.name}</div>
+              <div className="text-xs text-white/25">{s.desc}</div>
+            </div>
+            <div className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${s.connected ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-white/5 text-white/25 border-white/5"}`}>
+              {s.connected ? "Подключено" : "Не настроено"}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1523,39 +1760,120 @@ function ExportSection({ editorState, onGoToEditor }: { editorState: EditorState
 }
 
 function HelpSection() {
-  const tutorials = [
-    { title: "Быстрый старт", desc: "Создайте первый проект за 5 минут", icon: "Rocket", time: "5 мин" },
-    { title: "ИИ-генерация сцен", desc: "Как писать эффективные промпты", icon: "Sparkles", time: "8 мин" },
-    { title: "Работа с таймлайном", desc: "Редактирование, обрезка и переходы", icon: "Film", time: "12 мин" },
-    { title: "Экспорт и форматы", desc: "Оптимальные настройки для разных платформ", icon: "Share2", time: "6 мин" },
-    { title: "Эффекты и фильтры", desc: "Библиотека визуальных эффектов", icon: "Wand2", time: "10 мин" },
+  const SF = { fontFamily: "'Syne', sans-serif" };
+  const [query, setQuery] = useState("");
+
+  const guides = [
+    { title: "Быстрый старт", desc: "Создайте первое видео за 5 минут", icon: "Rocket", time: "5 мин", url: "https://docs.runwayml.com" },
+    { title: "ИИ-генерация сцен", desc: "Как писать эффективные промпты для Runway Gen-3", icon: "Sparkles", time: "8 мин", url: "https://docs.runwayml.com/docs/prompting-guide" },
+    { title: "Инструменты редактора", desc: "Стили, цвета, фильтры, слои и текстовые оверлеи", icon: "Wand2", time: "10 мин", url: "#" },
+    { title: "Экспорт и Telegram", desc: "Скачивание и отправка видео в каналы и чаты", icon: "Share2", time: "6 мин", url: "#" },
+    { title: "Настройка API-ключей", desc: "Runway ML, OpenAI и Telegram Bot Token", icon: "Key", time: "4 мин", url: "https://app.runwayml.com/settings" },
   ];
+
+  const faq = [
+    { q: "Сколько стоит генерация одного видео?", a: "Стоимость зависит от тарифа Runway ML. Каждая генерация списывает кредиты с вашего аккаунта на runwayml.com." },
+    { q: "Почему видео генерируется долго?", a: "Runway Gen-3 обычно занимает 1–3 минуты на 10 секунд видео. Время зависит от нагрузки на серверы Runway." },
+    { q: "Можно ли отменить генерацию?", a: "Отмену в браузере нужно делать вручную — перезагрузить страницу. Задача на серверах Runway продолжит работу." },
+    { q: "Как получить Chat ID для Telegram?", a: "Напишите любое сообщение боту @userinfobot в Telegram — он вернёт ваш числовой ID. Для каналов используйте @username." },
+    { q: "Видео скачивается без наложенных фильтров?", a: "Да, CSS-фильтры работают только в предпросмотре браузера. Скачивается оригинальный файл Runway в максимальном качестве." },
+  ];
+
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
+
+  const filtered = query.trim()
+    ? guides.filter(g => g.title.toLowerCase().includes(query.toLowerCase()) || g.desc.toLowerCase().includes(query.toLowerCase()))
+    : guides;
 
   return (
     <div className="flex flex-col h-full gap-5 overflow-y-auto scrollbar-thin pr-1 animate-fade-in">
-      <div>
-        <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "'Syne', sans-serif" }}>Справка</h2>
-        <p className="text-sm text-white/30 mt-1">Туториалы, документация и поддержка</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white" style={SF}>Справка</h2>
+          <p className="text-sm text-white/30 mt-1">Гайды, FAQ и поддержка</p>
+        </div>
+        {/* System status */}
+        <div className="flex flex-col items-end gap-1.5">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[11px] text-emerald-400" style={SF}>Системы работают</span>
+          </div>
+          <span className="text-[10px] text-white/15">Runway · OpenAI · Telegram</span>
+        </div>
       </div>
-      <div className="glass rounded-xl p-4 flex items-center gap-3">
-        <Icon name="Search" size={16} className="text-white/30" />
-        <input placeholder="Поиск по документации..." className="flex-1 bg-transparent text-sm text-white/60 placeholder:text-white/20 focus:outline-none" />
+
+      {/* Search */}
+      <div className="glass rounded-xl px-4 py-3 flex items-center gap-3">
+        <Icon name="Search" size={15} className="text-white/25 shrink-0" />
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Поиск по гайдам..."
+          className="flex-1 bg-transparent text-sm text-white/60 placeholder:text-white/20 focus:outline-none"
+        />
+        {query && (
+          <button onClick={() => setQuery("")} className="text-white/20 hover:text-white/50 transition-colors">
+            <Icon name="X" size={13} />
+          </button>
+        )}
       </div>
-      <div className="flex flex-col gap-3">
-        {tutorials.map((t, i) => (
-          <div key={i} className="glass rounded-xl p-4 flex items-center gap-4 hover:border-amber-500/20 transition-all group cursor-pointer animate-fade-in"
-            style={{ animationDelay: `${i*0.07}s`, animationFillMode: "both" }}>
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
-              <Icon name={t.icon as any} size={18} className="text-amber-400" />
+
+      {/* Guides */}
+      <div className="flex flex-col gap-2">
+        <p className="text-xs text-white/25 px-1" style={SF}>ГАЙДЫ</p>
+        {filtered.length === 0 && (
+          <div className="text-center py-6 text-sm text-white/20">Ничего не найдено</div>
+        )}
+        {filtered.map((t, i) => (
+          <a key={i} href={t.url} target="_blank" rel="noreferrer"
+            className="glass rounded-xl p-4 flex items-center gap-4 hover:border-amber-500/20 transition-all group animate-fade-in"
+            style={{ animationDelay: `${i * 0.05}s`, animationFillMode: "both", textDecoration: "none" }}>
+            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 group-hover:bg-amber-500/20 transition-all">
+              <Icon name={t.icon as any} size={17} className="text-amber-400" />
             </div>
             <div className="flex-1">
-              <div className="font-semibold text-white/80 group-hover:text-white text-sm transition-colors" style={{ fontFamily: "'Syne', sans-serif" }}>{t.title}</div>
+              <div className="font-semibold text-white/80 group-hover:text-white text-sm transition-colors" style={SF}>{t.title}</div>
               <div className="text-xs text-white/30 mt-0.5">{t.desc}</div>
             </div>
-            <span className="text-xs text-white/20 shrink-0">{t.time}</span>
-            <Icon name="ChevronRight" size={14} className="text-white/20 group-hover:text-amber-400 transition-colors" />
+            <span className="text-xs text-white/15 shrink-0 font-mono">{t.time}</span>
+            <Icon name="ExternalLink" size={13} className="text-white/15 group-hover:text-amber-400 transition-colors shrink-0" />
+          </a>
+        ))}
+      </div>
+
+      {/* FAQ */}
+      <div className="flex flex-col gap-2">
+        <p className="text-xs text-white/25 px-1" style={SF}>ЧАСТЫЕ ВОПРОСЫ</p>
+        {faq.map((f, i) => (
+          <div key={i} className="glass rounded-xl overflow-hidden border border-white/5 hover:border-white/10 transition-all">
+            <button onClick={() => setOpenFaq(openFaq === i ? null : i)}
+              className="w-full flex items-center justify-between gap-3 p-4 text-left">
+              <span className="text-sm text-white/70 group-hover:text-white transition-colors leading-snug" style={SF}>{f.q}</span>
+              <Icon name={openFaq === i ? "ChevronUp" : "ChevronDown"} size={14} className="text-white/25 shrink-0 transition-transform" />
+            </button>
+            {openFaq === i && (
+              <div className="px-4 pb-4 text-sm text-white/40 leading-relaxed animate-fade-in border-t border-white/5 pt-3">
+                {f.a}
+              </div>
+            )}
           </div>
         ))}
+      </div>
+
+      {/* Support */}
+      <div className="glass rounded-xl p-5 flex items-center gap-4">
+        <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center shrink-0">
+          <Icon name="MessageCircle" size={18} className="text-violet-400" />
+        </div>
+        <div className="flex-1">
+          <div className="font-semibold text-white/70 text-sm" style={SF}>Нужна помощь?</div>
+          <div className="text-xs text-white/30 mt-0.5">Напишите нам — ответим в течение дня</div>
+        </div>
+        <a href="mailto:support@frameforge.ai"
+          className="px-3 py-1.5 rounded-lg border border-violet-500/30 text-xs text-violet-400 hover:bg-violet-500/10 transition-all flex items-center gap-1.5" style={SF}>
+          <Icon name="Mail" size={12} />
+          Написать
+        </a>
       </div>
     </div>
   );
@@ -1572,6 +1890,13 @@ export default function Index() {
     appliedFilter: null,
     appliedTexts: [],
   });
+  // Lifted prompt so Library can push scenes into Editor
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+
+  const handleUseScenePrompt = useCallback((prompt: string) => {
+    setPendingPrompt(prompt);
+    setActiveSection("editor");
+  }, []);
 
   const handleEditorStateChange = useCallback((patch: Partial<EditorState>) => {
     setEditorState(prev => ({ ...prev, ...patch }));
@@ -1602,9 +1927,11 @@ export default function Index() {
           onSaveProject={handleSaveProject}
           editorState={editorState}
           onEditorStateChange={handleEditorStateChange}
+          pendingPrompt={pendingPrompt}
+          onPendingPromptUsed={() => setPendingPrompt(null)}
         />
       );
-      case "library": return <LibrarySection />;
+      case "library": return <LibrarySection onUsePrompt={handleUseScenePrompt} />;
       case "projects": return (
         <ProjectsSection
           projects={projects}
