@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Empty topic validation",
+      "method": "POST",
+      "path": "/",
+      "body": {"topic": ""},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "Тема не может быть пустой"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

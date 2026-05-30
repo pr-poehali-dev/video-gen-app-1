@@ -4,6 +4,7 @@ import Icon from "@/components/ui/icon";
 
 const API_GENERATE = "https://functions.poehali.dev/41ee0003-70f4-4f10-9198-9c316970c345";
 const API_CHECK = "https://functions.poehali.dev/a4867ee5-4dfc-4ec4-bf50-f3681ee61227";
+const API_TEXT = "https://functions.poehali.dev/9ea548b8-684b-434d-b439-9155c248db4d";
 
 type GenStatus = "idle" | "pending" | "running" | "done" | "error";
 
@@ -87,6 +88,497 @@ const EXPORT_FORMATS = [
   { fmt: "WebM VP9", res: "1080p", fps: "30fps", size: "~320 MB" },
 ];
 
+// ─── VIDEO STYLES ──────────────────────────────────────────────────────────────
+const PRESET_STYLES = [
+  { id: "cinematic", label: "Кинематограф", desc: "Широкоэкранный 2.39:1, мягкое боке", emoji: "🎬" },
+  { id: "noir", label: "Нуар", desc: "Высокий контраст, тени, монохром", emoji: "🌑" },
+  { id: "scifi", label: "Sci-Fi", desc: "Неоновые блики, технологичность", emoji: "🚀" },
+  { id: "vintage", label: "Винтаж", desc: "Тёплые тона, зерно, ретро", emoji: "📽️" },
+  { id: "documentary", label: "Документальный", desc: "Натуральный свет, реализм", emoji: "🎥" },
+  { id: "anime", label: "Аниме", desc: "Яркие цвета, cel-shading", emoji: "✨" },
+  { id: "horror", label: "Хоррор", desc: "Холодные тона, тёмные тени", emoji: "👁️" },
+  { id: "commercial", label: "Реклама", desc: "Яркий, продающий, динамичный", emoji: "💡" },
+];
+
+const COLOR_PALETTE = [
+  "#ff6b35","#ff4757","#ff3f81","#c44dff","#5352ed","#2196f3","#00b4d8","#00c3a0",
+  "#00e676","#76ff03","#ffea00","#ff9100","#ff6d00","#8d6e63","#90a4ae","#546e7a",
+  "#ffffff","#e0e0e0","#bdbdbd","#9e9e9e","#757575","#616161","#424242","#212121",
+  "#ffd6e0","#c8e6c9","#bbdefb","#fff9c4","#f8bbd9","#d7ccc8","#b2ebf2","#dcedc8",
+];
+
+const VIDEO_FILTERS = [
+  { id: "none",       label: "Без фильтра",   css: "none",                          preview: "bg-zinc-700" },
+  { id: "warm",       label: "Тёплый",        css: "sepia(0.4) saturate(1.3)",      preview: "bg-amber-700/60" },
+  { id: "cold",       label: "Холодный",      css: "hue-rotate(190deg) saturate(1.2)", preview: "bg-sky-700/60" },
+  { id: "bw",         label: "Ч/Б",           css: "grayscale(1)",                  preview: "bg-zinc-500" },
+  { id: "vintage",    label: "Винтаж",        css: "sepia(0.6) contrast(1.1)",      preview: "bg-yellow-800/60" },
+  { id: "vivid",      label: "Насыщенный",    css: "saturate(2) contrast(1.1)",     preview: "bg-gradient-to-br from-purple-600 to-orange-500" },
+  { id: "fade",       label: "Выцветший",     css: "opacity(0.8) saturate(0.7)",    preview: "bg-zinc-600/50" },
+  { id: "sharp",      label: "Резкий",        css: "contrast(1.4) saturate(1.1)",   preview: "bg-zinc-800" },
+  { id: "dreamy",     label: "Мечтательный",  css: "blur(0.5px) brightness(1.1) saturate(0.9)", preview: "bg-pink-400/40" },
+];
+
+const LAYER_TYPES = [
+  { id: "text",    label: "Текст",       icon: "Type",       color: "text-amber-400"  },
+  { id: "shape",   label: "Фигура",      icon: "Square",     color: "text-sky-400"    },
+  { id: "logo",    label: "Логотип",     icon: "Image",      color: "text-violet-400" },
+  { id: "blur",    label: "Размытие",    icon: "Droplets",   color: "text-cyan-400"   },
+  { id: "overlay", label: "Оверлей",     icon: "Layers",     color: "text-emerald-400"},
+  { id: "sticker", label: "Стикер",      icon: "Smile",      color: "text-rose-400"   },
+];
+
+interface Layer {
+  id: string;
+  type: string;
+  label: string;
+  visible: boolean;
+  locked: boolean;
+}
+
+// ─── TOOL PANEL MODAL ──────────────────────────────────────────────────────────
+type ToolType = "style" | "color" | "sound" | "text" | "layers" | "filters" | null;
+
+function ToolsPanel({
+  open,
+  tool,
+  onClose,
+  onApplyStyle,
+  onApplyColor,
+  onApplyFilter,
+  onAddLayer,
+  onApplyText,
+}: {
+  open: boolean;
+  tool: ToolType;
+  onClose: () => void;
+  onApplyStyle: (s: string) => void;
+  onApplyColor: (c: string) => void;
+  onApplyFilter: (f: string) => void;
+  onAddLayer: (l: Layer) => void;
+  onApplyText: (t: string) => void;
+}) {
+  // Style panel state
+  const [customStyle, setCustomStyle] = useState("");
+  // Color panel state
+  const [customColor, setCustomColor] = useState("#ffffff");
+  // Sound panel state
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [audioUrl, setAudioUrl] = useState("");
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  // Text panel state
+  const [textTopic, setTextTopic] = useState("");
+  const [textType, setTextType] = useState("заголовок");
+  const [textStyle, setTextStyle] = useState("нейтральный");
+  const [generatedText, setGeneratedText] = useState("");
+  const [textLoading, setTextLoading] = useState(false);
+  const [textError, setTextError] = useState("");
+  // Layers state
+  const [layers, setLayers] = useState<Layer[]>([
+    { id: "1", type: "text", label: "Заголовок", visible: true, locked: false },
+    { id: "2", type: "overlay", label: "Оверлей фона", visible: true, locked: false },
+  ]);
+
+  const handleGenerateText = async () => {
+    if (!textTopic.trim()) return;
+    setTextLoading(true); setTextError(""); setGeneratedText("");
+    try {
+      const res = await fetch(API_TEXT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: textTopic, type: textType, style: textStyle }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setTextError(data.error || "Ошибка генерации"); return; }
+      setGeneratedText(data.text);
+    } catch (e: any) {
+      setTextError(e.message || "Сетевая ошибка");
+    } finally {
+      setTextLoading(false);
+    }
+  };
+
+  const handleAudioFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAudioFile(file);
+    setAudioUrl(URL.createObjectURL(file));
+  };
+
+  const addLayer = (type: typeof LAYER_TYPES[0]) => {
+    const newLayer: Layer = {
+      id: crypto.randomUUID(),
+      type: type.id,
+      label: `${type.label} ${layers.filter(l => l.type === type.id).length + 1}`,
+      visible: true,
+      locked: false,
+    };
+    setLayers(prev => [newLayer, ...prev]);
+    onAddLayer(newLayer);
+  };
+
+  const toggleLayerProp = (id: string, prop: "visible" | "locked") => {
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, [prop]: !l[prop] } : l));
+  };
+
+  const removeLayer = (id: string) => setLayers(prev => prev.filter(l => l.id !== id));
+
+  if (!open || !tool) return null;
+
+  const panelTitles: Record<NonNullable<ToolType>, string> = {
+    style: "Стиль видео", color: "Цветовая палитра", sound: "Звук и музыка",
+    text: "ИИ-генератор текста", layers: "Слои", filters: "Фильтры",
+  };
+
+  const SF = { fontFamily: "'Syne', sans-serif" };
+
+  return (
+    <div className="fixed inset-0 z-40 flex" onClick={onClose}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      {/* Panel slides in from right */}
+      <div
+        className="absolute right-0 top-0 bottom-0 w-[380px] bg-[hsl(220_14%_9%)] border-l border-white/8 flex flex-col shadow-2xl animate-slide-in-right"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/5 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-amber-500/15 flex items-center justify-center">
+              <Icon name={tool === "style" ? "Wand2" : tool === "color" ? "Palette" : tool === "sound" ? "Music" : tool === "text" ? "Type" : tool === "layers" ? "Layers" : "Sliders"} size={14} className="text-amber-400" />
+            </div>
+            <span className="font-bold text-white/90 text-sm" style={SF}>{panelTitles[tool]}</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-white/5 flex items-center justify-center transition-colors">
+            <Icon name="X" size={15} className="text-white/40" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-4 flex flex-col gap-5">
+
+          {/* ── STYLE ── */}
+          {tool === "style" && (
+            <>
+              <div>
+                <p className="text-xs text-white/30 mb-3">Готовые стили</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {PRESET_STYLES.map(s => (
+                    <button key={s.id} onClick={() => onApplyStyle(s.id)}
+                      className="flex items-start gap-2.5 p-3 rounded-xl border border-white/5 hover:border-amber-500/30 bg-white/2 hover:bg-amber-500/5 transition-all text-left group">
+                      <span className="text-lg mt-0.5 shrink-0">{s.emoji}</span>
+                      <div>
+                        <div className="text-xs font-semibold text-white/70 group-hover:text-white transition-colors" style={SF}>{s.label}</div>
+                        <div className="text-[10px] text-white/25 mt-0.5 leading-tight">{s.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-xs text-white/30 mb-2">Свой стиль</p>
+                <textarea
+                  value={customStyle}
+                  onChange={e => setCustomStyle(e.target.value)}
+                  placeholder="Опишите желаемый стиль... Например: «Тёмная атмосфера, синие неоновые блики, туман»"
+                  className="w-full bg-white/5 rounded-xl p-3 text-sm text-white/70 placeholder:text-white/20 resize-none border border-white/5 focus:outline-none focus:border-amber-500/30 transition-colors h-24 scrollbar-thin"
+                />
+                <button
+                  disabled={!customStyle.trim()}
+                  onClick={() => { onApplyStyle("custom:" + customStyle); setCustomStyle(""); }}
+                  className="w-full mt-2 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-black font-bold text-sm transition-all active:scale-95" style={SF}>
+                  Применить стиль
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ── COLOR ── */}
+          {tool === "color" && (
+            <>
+              <div>
+                <p className="text-xs text-white/30 mb-3">Палитра цветов</p>
+                <div className="grid grid-cols-8 gap-1.5">
+                  {COLOR_PALETTE.map(c => (
+                    <button key={c} onClick={() => onApplyColor(c)}
+                      className="w-full aspect-square rounded-lg border border-white/10 hover:scale-110 hover:border-white/40 transition-all"
+                      style={{ background: c }} title={c} />
+                  ))}
+                </div>
+              </div>
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-xs text-white/30 mb-2">Свой цвет</p>
+                <div className="flex gap-3 items-center">
+                  <input type="color" value={customColor} onChange={e => setCustomColor(e.target.value)}
+                    className="w-12 h-12 rounded-xl cursor-pointer border-2 border-white/10 bg-transparent" />
+                  <div className="flex-1">
+                    <input type="text" value={customColor} onChange={e => setCustomColor(e.target.value)}
+                      className="w-full bg-white/5 rounded-lg px-3 py-2 text-sm text-white/70 font-mono border border-white/5 focus:outline-none focus:border-amber-500/30 transition-colors" />
+                  </div>
+                  <button onClick={() => onApplyColor(customColor)}
+                    className="px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition-all" style={SF}>
+                    ОК
+                  </button>
+                </div>
+              </div>
+              {/* Color gradients */}
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-xs text-white/30 mb-3">Градиенты</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    "linear-gradient(135deg,#ff6b35,#f7c59f)",
+                    "linear-gradient(135deg,#5352ed,#c44dff)",
+                    "linear-gradient(135deg,#00c3a0,#2196f3)",
+                    "linear-gradient(135deg,#ff4757,#ff6d00)",
+                    "linear-gradient(135deg,#212121,#546e7a)",
+                    "linear-gradient(135deg,#fff9c4,#ff9100)",
+                  ].map((g, i) => (
+                    <button key={i} onClick={() => onApplyColor(g)}
+                      className="h-10 rounded-lg border border-white/10 hover:scale-[1.03] hover:border-white/30 transition-all"
+                      style={{ background: g }} />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ── SOUND ── */}
+          {tool === "sound" && (
+            <>
+              <div>
+                <p className="text-xs text-white/30 mb-3">Загрузить музыку или звук</p>
+                <div
+                  onClick={() => audioInputRef.current?.click()}
+                  className="border-2 border-dashed border-white/10 hover:border-amber-500/40 rounded-xl p-6 flex flex-col items-center gap-3 cursor-pointer transition-all group">
+                  <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center group-hover:bg-amber-500/20 transition-all">
+                    <Icon name="Upload" size={22} className="text-amber-400" />
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm text-white/50 font-medium" style={SF}>Нажмите или перетащите файл</div>
+                    <div className="text-xs text-white/20 mt-1">MP3, WAV, AAC, OGG · до 50 МБ</div>
+                  </div>
+                </div>
+                <input ref={audioInputRef} type="file" accept="audio/*" onChange={handleAudioFile} className="hidden" />
+              </div>
+
+              {audioFile && audioUrl && (
+                <div className="glass rounded-xl p-4 flex flex-col gap-3 animate-fade-in">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0">
+                      <Icon name="Music" size={16} className="text-amber-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-white/80 truncate" style={SF}>{audioFile.name}</div>
+                      <div className="text-xs text-white/30">{(audioFile.size / 1024 / 1024).toFixed(1)} МБ</div>
+                    </div>
+                    <button onClick={() => { setAudioFile(null); setAudioUrl(""); }}
+                      className="w-7 h-7 rounded-lg hover:bg-red-500/10 flex items-center justify-center transition-colors">
+                      <Icon name="Trash2" size={13} className="text-white/30 hover:text-red-400" />
+                    </button>
+                  </div>
+                  <audio src={audioUrl} controls className="w-full h-8 rounded-lg" />
+                  <button onClick={() => onApplyColor("sound:" + audioFile.name)}
+                    className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-all active:scale-95" style={SF}>
+                    Добавить в видео
+                  </button>
+                </div>
+              )}
+
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-xs text-white/30 mb-3">Встроенные звуки</p>
+                <div className="flex flex-col gap-2">
+                  {[
+                    { name: "Атмосферный фон", dur: "2:30", icon: "Wind" },
+                    { name: "Эпический оркестр", dur: "1:45", icon: "Music2" },
+                    { name: "Электронный бит", dur: "0:58", icon: "Zap" },
+                    { name: "Кинематографичный дрон", dur: "3:12", icon: "Radio" },
+                    { name: "Тишина (без звука)", dur: "—", icon: "VolumeX" },
+                  ].map(s => (
+                    <div key={s.name} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-white/3 border border-transparent hover:border-white/5 group cursor-pointer transition-all">
+                      <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
+                        <Icon name={s.icon as any} size={14} className="text-white/30 group-hover:text-amber-400 transition-colors" />
+                      </div>
+                      <span className="flex-1 text-sm text-white/50 group-hover:text-white/80 transition-colors">{s.name}</span>
+                      <span className="text-xs text-white/20 font-mono">{s.dur}</span>
+                      <Icon name="Plus" size={13} className="text-white/20 group-hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-all" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ── TEXT ── */}
+          {tool === "text" && (
+            <>
+              <div className="flex flex-col gap-3">
+                <div>
+                  <p className="text-xs text-white/30 mb-2">Тема / о чём видео</p>
+                  <textarea
+                    value={textTopic}
+                    onChange={e => setTextTopic(e.target.value)}
+                    placeholder="Например: «Рекламный ролик спортивных кроссовок Nike»"
+                    className="w-full bg-white/5 rounded-xl p-3 text-sm text-white/70 placeholder:text-white/20 resize-none border border-white/5 focus:outline-none focus:border-amber-500/30 transition-colors h-20 scrollbar-thin"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-white/30 mb-2">Тип текста</p>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {["заголовок","подзаголовок","слоган","описание","субтитры","призыв к действию"].map(t => (
+                      <button key={t} onClick={() => setTextType(t)}
+                        className={`py-1.5 rounded-lg text-[11px] font-medium border transition-all ${textType === t ? "bg-amber-500/20 border-amber-500/40 text-amber-400" : "border-white/5 text-white/30 hover:border-white/15 hover:text-white/60"}`} style={SF}>
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-white/30 mb-2">Стиль</p>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {["нейтральный","динамичный","эмоциональный","минималистичный","дерзкий"].map(s => (
+                      <button key={s} onClick={() => setTextStyle(s)}
+                        className={`px-2.5 py-1 rounded-full text-xs border transition-all ${textStyle === s ? "bg-amber-500/20 border-amber-500/40 text-amber-400" : "border-white/5 text-white/30 hover:border-white/15"}`} style={SF}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={handleGenerateText} disabled={!textTopic.trim() || textLoading}
+                  className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-black font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2" style={SF}>
+                  {textLoading ? <><Icon name="Loader2" size={14} className="animate-spin" />Генерирую...</> : "✦ Сгенерировать текст"}
+                </button>
+              </div>
+
+              {textError && (
+                <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 flex items-center gap-2 animate-fade-in">
+                  <Icon name="AlertCircle" size={13} /> {textError}
+                </div>
+              )}
+
+              {generatedText && (
+                <div className="glass rounded-xl p-4 flex flex-col gap-3 animate-fade-in border border-amber-500/20">
+                  <div className="flex items-center gap-2 text-xs text-amber-400">
+                    <Icon name="Sparkles" size={12} /> Результат
+                  </div>
+                  <p className="text-sm text-white/80 leading-relaxed">{generatedText}</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => { onApplyText(generatedText); onClose(); }}
+                      className="flex-1 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all" style={SF}>
+                      Добавить в видео
+                    </button>
+                    <button onClick={() => navigator.clipboard.writeText(generatedText)}
+                      className="px-3 py-1.5 rounded-lg border border-white/10 hover:border-white/20 text-xs text-white/40 hover:text-white/70 transition-all flex items-center gap-1.5">
+                      <Icon name="Copy" size={12} /> Копировать
+                    </button>
+                    <button onClick={handleGenerateText}
+                      className="px-3 py-1.5 rounded-lg border border-white/10 hover:border-amber-500/30 text-xs text-white/40 hover:text-amber-400 transition-all">
+                      <Icon name="RefreshCw" size={12} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── LAYERS ── */}
+          {tool === "layers" && (
+            <>
+              <div>
+                <p className="text-xs text-white/30 mb-3">Добавить слой</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {LAYER_TYPES.map(lt => (
+                    <button key={lt.id} onClick={() => addLayer(lt)}
+                      className="flex flex-col items-center gap-2 py-3 rounded-xl border border-white/5 hover:border-amber-500/30 bg-white/2 hover:bg-amber-500/5 transition-all group">
+                      <Icon name={lt.icon as any} size={18} className={`${lt.color} opacity-60 group-hover:opacity-100 transition-opacity`} />
+                      <span className="text-[10px] text-white/30 group-hover:text-white/70 transition-colors" style={SF}>{lt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-xs text-white/30 mb-3">Активные слои ({layers.length})</p>
+                <div className="flex flex-col gap-2">
+                  {layers.length === 0 && (
+                    <div className="text-center py-6 text-xs text-white/20">Слоев нет — добавьте выше</div>
+                  )}
+                  {layers.map((layer, i) => {
+                    const lt = LAYER_TYPES.find(l => l.id === layer.type);
+                    return (
+                      <div key={layer.id}
+                        className="flex items-center gap-3 p-2.5 rounded-lg border border-white/5 hover:border-white/10 transition-all group bg-white/2">
+                        <span className="text-xs text-white/20 font-mono w-4">{i + 1}</span>
+                        <Icon name={lt?.icon as any || "Square"} size={13} className={lt?.color || "text-white/30"} />
+                        <span className="flex-1 text-xs text-white/60 truncate" style={SF}>{layer.label}</span>
+                        <button onClick={() => toggleLayerProp(layer.id, "visible")}
+                          className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/5 transition-colors">
+                          <Icon name={layer.visible ? "Eye" : "EyeOff"} size={12} className={layer.visible ? "text-white/40" : "text-white/15"} />
+                        </button>
+                        <button onClick={() => toggleLayerProp(layer.id, "locked")}
+                          className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/5 transition-colors">
+                          <Icon name={layer.locked ? "Lock" : "Unlock"} size={12} className={layer.locked ? "text-amber-400" : "text-white/20"} />
+                        </button>
+                        <button onClick={() => removeLayer(layer.id)}
+                          className="w-6 h-6 flex items-center justify-center rounded hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100">
+                          <Icon name="Trash2" size={12} className="text-red-400/60" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ── FILTERS ── */}
+          {tool === "filters" && (
+            <>
+              <p className="text-xs text-white/30">Выберите фильтр для применения к видео</p>
+              <div className="grid grid-cols-3 gap-3">
+                {VIDEO_FILTERS.map(f => (
+                  <button key={f.id} onClick={() => onApplyFilter(f.id)}
+                    className="flex flex-col gap-2 group transition-all hover:scale-[1.03]">
+                    <div className={`w-full aspect-video rounded-lg ${f.preview} border border-white/10 group-hover:border-amber-500/40 transition-all overflow-hidden relative`}>
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="w-6 h-6 rounded-full bg-amber-500/80 flex items-center justify-center">
+                          <Icon name="Check" size={12} className="text-black" />
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-white/40 group-hover:text-amber-400 transition-colors text-center" style={SF}>{f.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-xs text-white/30 mb-3">Параметры коррекции</p>
+                {[
+                  { label: "Яркость", val: 50 },
+                  { label: "Контраст", val: 50 },
+                  { label: "Насыщенность", val: 50 },
+                  { label: "Резкость", val: 30 },
+                ].map(p => (
+                  <div key={p.label} className="flex items-center gap-3 mb-3">
+                    <span className="text-xs text-white/30 w-24 shrink-0">{p.label}</span>
+                    <input type="range" min={0} max={100} defaultValue={p.val}
+                      className="flex-1 accent-amber-500 cursor-pointer" />
+                    <span className="text-xs font-mono text-amber-400/60 w-8 text-right">{p.val}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 pb-4 pt-2 border-t border-white/5 shrink-0">
+          <button onClick={onClose}
+            className="w-full py-2 rounded-xl border border-white/10 text-xs text-white/40 hover:text-white/70 hover:border-white/20 transition-all" style={SF}>
+            Закрыть
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EditorSection({ onSaveProject }: { onSaveProject: (p: SavedProject) => void }) {
   const [aiPrompt, setAiPrompt] = useState("");
   const [duration, setDuration] = useState(10);
@@ -99,6 +591,11 @@ function EditorSection({ onSaveProject }: { onSaveProject: (p: SavedProject) => 
   const [saved, setSaved] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [activeTool, setActiveTool] = useState<ToolType>(null);
+  const [appliedStyle, setAppliedStyle] = useState<string | null>(null);
+  const [appliedColor, setAppliedColor] = useState<string | null>(null);
+  const [appliedFilter, setAppliedFilter] = useState<string | null>(null);
+  const [appliedTexts, setAppliedTexts] = useState<string[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -391,22 +888,41 @@ function EditorSection({ onSaveProject }: { onSaveProject: (p: SavedProject) => 
           </div>
 
           <div className="glass rounded-xl p-3 grid grid-cols-3 gap-2">
-            {[
-              { icon: "Wand2", label: "Стиль" },
-              { icon: "Palette", label: "Цвет" },
-              { icon: "Music", label: "Звук" },
-              { icon: "Type", label: "Текст" },
-              { icon: "Layers", label: "Слои" },
-              { icon: "Sliders", label: "Фильтры" },
-            ].map(({ icon, label }) => (
-              <button key={icon} className="flex flex-col items-center gap-1 py-2 px-1 rounded-lg bg-white/3 hover:bg-amber-500/10 border border-white/5 hover:border-amber-500/20 transition-all group">
-                <Icon name={icon as any} size={15} className="text-white/40 group-hover:text-amber-400 transition-colors" />
-                <span className="text-[10px] text-white/30 group-hover:text-white/60 transition-colors">{label}</span>
+            {([
+              { icon: "Wand2",    label: "Стиль",    tool: "style"   as ToolType, badge: appliedStyle   },
+              { icon: "Palette",  label: "Цвет",     tool: "color"   as ToolType, badge: appliedColor   },
+              { icon: "Music",    label: "Звук",     tool: "sound"   as ToolType, badge: null           },
+              { icon: "Type",     label: "Текст",    tool: "text"    as ToolType, badge: appliedTexts.length > 0 ? String(appliedTexts.length) : null },
+              { icon: "Layers",   label: "Слои",     tool: "layers"  as ToolType, badge: null           },
+              { icon: "Sliders",  label: "Фильтры",  tool: "filters" as ToolType, badge: appliedFilter  },
+            ] as const).map(({ icon, label, tool, badge }) => (
+              <button key={icon} onClick={() => setActiveTool(tool)}
+                className={`relative flex flex-col items-center gap-1 py-2 px-1 rounded-lg border transition-all group
+                  ${activeTool === tool ? "bg-amber-500/15 border-amber-500/30 text-amber-400" : "bg-white/[0.02] hover:bg-amber-500/10 border-white/5 hover:border-amber-500/20 text-white/40 hover:text-amber-400"}`}>
+                <Icon name={icon as any} size={15} className="transition-colors" />
+                <span className="text-[10px] transition-colors">{label}</span>
+                {badge && (
+                  <div className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-amber-500 flex items-center justify-center">
+                    <span className="text-[8px] font-bold text-black">{typeof badge === "string" && badge.length <= 2 ? badge : "✓"}</span>
+                  </div>
+                )}
               </button>
             ))}
           </div>
         </div>
       </div>
+
+      {/* Tools side panel */}
+      <ToolsPanel
+        open={activeTool !== null}
+        tool={activeTool}
+        onClose={() => setActiveTool(null)}
+        onApplyStyle={s => { setAppliedStyle(s); setActiveTool(null); }}
+        onApplyColor={c => { setAppliedColor(c); setActiveTool(null); }}
+        onApplyFilter={f => { setAppliedFilter(f); setActiveTool(null); }}
+        onAddLayer={() => {}}
+        onApplyText={t => { setAppliedTexts(prev => [...prev, t]); setActiveTool(null); }}
+      />
 
       {/* Timeline */}
       <div className="glass rounded-xl overflow-hidden">
